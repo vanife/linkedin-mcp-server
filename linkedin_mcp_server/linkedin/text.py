@@ -149,6 +149,42 @@ _JOB_APPLY_TEXT: dict[str, JobApplyTextTable] = {
 # as open.
 JOB_APPLY_EN_US = _JOB_APPLY_TEXT["en-US"]
 
+
+@dataclass(frozen=True)
+class JobApplicantsTextTable:
+    """Visible-text policy for reading a posting's applicant figure."""
+
+    # Searched within a line rather than anchored to it, because LinkedIn runs
+    # the figure into the posting's metadata line ("Zurich, Switzerland · 2
+    # days ago · 32 applicants"), where a whole-line match would never fire.
+    # Each pattern's first group is the figure. "Over 100 applicants" answers
+    # 100, which is the floor LinkedIn itself shows rather than a true count.
+    applicant_patterns: tuple[re.Pattern[str], ...]
+    # Taken from `JobPostingTextTable` for the reason `JobApplyTextTable`
+    # gives: the figure is trusted above the earliest heading only, so a
+    # description that mentions applicants, or a "More jobs" card below it,
+    # cannot pass for this posting's count.
+    description_headings: tuple[str, ...]
+
+
+_JOB_APPLICANTS_TEXT: dict[str, JobApplicantsTextTable] = {
+    "en-US": JobApplicantsTextTable(
+        applicant_patterns=(
+            re.compile(r"(\d[\d,]*)\s+people clicked apply", re.IGNORECASE),
+            re.compile(r"(\d[\d,]*)\s+applicants?\b", re.IGNORECASE),
+        ),
+        description_headings=JOB_POSTING_EN_US.description_headings,
+    ),
+}
+
+# Same locale contract as `DETAIL_CAPTURE_EN_US`. Both forms are what the
+# header shows instead of each other: a posting counts applicants until
+# LinkedIn switches it to the clicked-apply figure, so neither alone covers
+# the postings this reads. A posting in another language names no figure these
+# patterns can find and answers None, which is the same answer a posting that
+# shows no figure at all gives.
+JOB_APPLICANTS_EN_US = _JOB_APPLICANTS_TEXT["en-US"]
+
 # Patterns that mark the start of LinkedIn page chrome (sidebar/footer).
 # Everything from the earliest match onwards is stripped.
 _NOISE_MARKERS: list[re.Pattern[str]] = [

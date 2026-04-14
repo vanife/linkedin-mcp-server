@@ -5,6 +5,7 @@ from urllib.parse import quote
 import pytest
 
 from linkedin_mcp_server.linkedin.job_policy import (
+    applicant_count,
     dropped_filters_section_error,
     employer_apply_url,
     label_similar_jobs,
@@ -12,6 +13,7 @@ from linkedin_mcp_server.linkedin.job_policy import (
     route,
     same_job_search,
 )
+from linkedin_mcp_server.linkedin.text import JOB_APPLICANTS_EN_US
 from linkedin_mcp_server.linkedin.link_metadata import (
     Reference,
     _SEARCH_RESULTS_REFERENCE_CAP,
@@ -241,3 +243,53 @@ class TestEmployerApplyUrl:
         url = "https://jobs.example.com/acme%20jobs/1?source=some%20board"
 
         assert employer_apply_url(url) == url
+
+
+class TestApplicantCount:
+    """The figure is read above the description, or not claimed at all."""
+
+    @staticmethod
+    def _posting(header: str) -> str:
+        return f"Engineer\nAcme\n{header}\nAbout the job\nBuild agents."
+
+    @pytest.mark.parametrize(
+        ("header", "expected"),
+        [
+            # The figure runs into the metadata line rather than owning one.
+            ("Zurich, Switzerland · 2 days ago · 32 applicants", 32),
+            ("Remote · 1 applicant", 1),
+            ("Zurich · Over 100 people clicked apply", 100),
+            ("Zurich · 1,284 applicants", 1284),
+            # Both forms occur; whichever the header shows is the answer.
+            ("Zurich · 47 people clicked apply", 47),
+        ],
+    )
+    def test_the_header_figure_is_read(self, header, expected):
+        text = self._posting(header)
+
+        assert applicant_count(text, JOB_APPLICANTS_EN_US) == expected
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            # A figure below the heading belongs to the description or to a
+            # "More jobs" card, not to this posting.
+            "Engineer\nAbout the job\nWe saw 500 applicants last year.",
+            # No heading, so there is no boundary to trust a line above.
+            "Engineer\nZurich · 32 applicants\nBuild agents.",
+            # A header that names no figure.
+            "Engineer\nAcme\nZurich · 2 days ago\nAbout the job\nBuild agents.",
+            # "2 days ago" is a number beside a word, and not this one.
+            "Engineer\nAcme\nPosted 2 days ago\nAbout the job\nBuild agents.",
+        ],
+    )
+    def test_no_figure_is_claimed_without_one(self, text):
+        assert applicant_count(text, JOB_APPLICANTS_EN_US) is None
+
+    def test_the_first_figure_above_the_heading_wins(self):
+        """A posting showing both forms answers once, from the earlier line."""
+        text = (
+            "Engineer\nZurich · 32 applicants\n9 people clicked apply\nAbout the job\nx"
+        )
+
+        assert applicant_count(text, JOB_APPLICANTS_EN_US) == 32

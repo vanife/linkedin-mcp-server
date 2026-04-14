@@ -50,9 +50,19 @@ def register_job_tools(
             section_errors.job_posting.error_type "description_missing" means
             the captured text lacks the expected "About the job" heading.
             The text is kept but may be incomplete; calling again may return more.
-            A posting that shows it was applied to or has closed also carries
-            apply: {type: "applied" | "closed"}; no apply key means neither
-            was read, not that the posting is open.
+            A captured posting also carries apply: {type, url?}, the same shape
+            get_job_apply_url returns: type is easy_apply, external, applied,
+            closed or unknown, and url is the employer's application link for
+            an external posting. unknown means the apply control could not be
+            read and is worth asking about again, which is what distinguishes
+            it from easy_apply, where there is no employer link to find. No
+            apply key at all means the posting itself was not captured; see
+            section_errors.
+            apply_url repeats apply.url for callers written before apply
+            existed, and applicant_count is the posting's applicant or
+            clicked-apply figure read from the captured text, or null when it
+            names none. Both are always present, and all of this is read from
+            the same page without a second navigation.
         """
         job_id = normalize_job_id(job_id)
         extractor = await get_ready_extractor(ctx, tool_name="get_job_details")

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qs, urlparse
 
 import asyncio
@@ -22,7 +22,7 @@ from linkedin_mcp_server.linkedin.contracts import (
     rate_limited_section_error,
 )
 from linkedin_mcp_server.linkedin.identifiers import job_view_url, normalize_job_id
-from linkedin_mcp_server.linkedin.job_pages import JobPageReader
+from linkedin_mcp_server.linkedin.job_pages import JobApplyRead, JobPageReader
 from linkedin_mcp_server.linkedin.job_policy import (
     JOB_SEARCH_PATHS,
     RESULTS_PER_LINKEDIN_PAGE,
@@ -33,6 +33,7 @@ from linkedin_mcp_server.linkedin.job_policy import (
     SCROLL_DEADLINE_MAX,
     SEARCH_TIMEOUT_FRACTION,
     JobsTrackerStage,
+    applicant_count,
     apply_link_missing_section_error,
     dropped_filters_section_error,
     dropped_offset_section_error,
@@ -48,9 +49,11 @@ from linkedin_mcp_server.linkedin.navigation import PageNavigator
 from linkedin_mcp_server.linkedin.search_urls import build_job_search_url
 from linkedin_mcp_server.linkedin.session import NAV_DELAY
 from linkedin_mcp_server.linkedin.text import (
+    JOB_APPLICANTS_EN_US,
     JOB_APPLY_EN_US,
     JOB_POSTING_EN_US,
     JOB_SEARCH_EN_US,
+    JobApplicantsTextTable,
     JobApplyTextTable,
     JobSearchTextTable,
 )
@@ -91,19 +94,27 @@ class JobReader:
         pages: JobPageReader,
         search_text: JobSearchTextTable = JOB_SEARCH_EN_US,
         apply_text: JobApplyTextTable = JOB_APPLY_EN_US,
+        applicants_text: JobApplicantsTextTable = JOB_APPLICANTS_EN_US,
     ):
         self._navigator = navigator
         self._capture = capture
         self._pages = pages
         self._search_text = search_text
         self._apply_text = apply_text
+        self._applicants_text = applicants_text
 
     async def read_job(self, job_id: str) -> dict[str, Any]:
         """Read a single job posting.
 
         Returns:
-            {url, sections: {name: text}}, plus {apply: {type}} when the
-            posting shows it was applied to or has closed.
+            {url, sections: {name: text}, apply_url, applicant_count}, plus
+            {apply: {type, url?}} whenever the posting itself was captured.
+            `apply` carries the same shape and the same `ApplyType` vocabulary
+            as `get_job_apply_url`, so a caller reads one or the other without
+            translating; `apply_url` repeats `apply.url` for callers that
+            predate it. `apply_url` and `applicant_count` are always present
+            and null when unread; all of it is answered from the page and text
+            this already has, without a second navigation.
         """
         job_id = normalize_job_id(job_id)
         url = job_view_url(job_id, "/")
@@ -135,13 +146,72 @@ class JobReader:
         }
         if references:
             result["references"] = references
+        state: Literal["applied", "closed"] | None = None
+        apply_url: str | None = None
+        count: int | None = None
         if "job_posting" in sections:
             state = posting_state(sections["job_posting"], self._apply_text)
+            count = applicant_count(sections["job_posting"], self._applicants_text)
+            # Only a posting still taking applications has an employer link to
+            # read, and skipping the rest is what keeps this free: a posting
+            # that was applied to or has closed renders no apply control, so
+            # asking would spend the control's whole timeout to learn what the
+            # text above already said.
             if state is not None:
                 result["apply"] = {"type": state}
+            else:
+                read = await self._read_employer_apply(url, job_id)
+                # An unread control answers `unknown` rather than going absent:
+                # the posting was captured, so something is known about how it
+                # applies, and the one thing worth saying is that this is not
+                # the `easy_apply` that also carries no URL.
+                apply: dict[str, str] = {
+                    "type": read.type if read is not None else "unknown"
+                }
+                if read is not None and read.url is not None:
+                    apply["url"] = read.url
+                    apply_url = read.url
+                result["apply"] = apply
+        result["apply_url"] = apply_url
+        result["applicant_count"] = count
         if section_errors:
             result["section_errors"] = section_errors
         return result
+
+    async def _read_employer_apply(self, url: str, job_id: str) -> JobApplyRead | None:
+        """How the posting already open takes applications, or None when unread.
+
+        The whole read is answered rather than its URL alone, because the type
+        is what tells a posting with no employer link from a link that could
+        not be read: both have no URL, and only one is worth asking about
+        again. None is the second of those, and the caller turns it into
+        `unknown` for the same reason `read_apply_on_current_page` does.
+
+        An unreadable control is not a reason to fail the whole read: the
+        caller asked for a job's details, and the sections are already in hand.
+
+        Where the browser actually is *is* checked, and that check is the cost
+        of not navigating: `get_job_apply_url` earns the right page by asking
+        for it, while this one inherits whatever the capture landed on. The
+        external link is found by its label among the page's anchors, so on
+        another page it would answer that page's link as this job's.
+        """
+        if f"/jobs/view/{job_id}" not in urlparse(self._pages.current_url).path:
+            logger.debug(
+                "Not reading an apply link: %s left the posting for %s",
+                url,
+                self._pages.current_url,
+            )
+            return None
+        try:
+            return await self._pages.read_apply_on_current_page(
+                url, job_id, self._apply_text
+            )
+        except LinkedInOperationError:
+            raise
+        except Exception as e:
+            logger.debug("Could not read how %s takes applications: %s", url, e)
+            return None
 
     async def get_job_apply_url(self, job_id: str) -> dict[str, Any]:
         """Read how a posting takes applications and where the employer's form is.

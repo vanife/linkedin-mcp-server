@@ -174,7 +174,11 @@ class TestReadJob:
         ):
             result = await reader.read_job("12345")
 
-        assert "apply" not in result
+        # Upstream asserts the key is absent, which said the same thing while
+        # `apply` existed only for a state read from text. This fork answers a
+        # type for every captured posting, so the claim to refuse is the state
+        # itself: these texts name one out of place and must not be believed.
+        assert result["apply"]["type"] not in {"applied", "closed"}
 
     async def test_jobs_a_posting_links_to_are_labelled_similar(self, mock_page):
         """The posting's own link and its "More jobs" cards are both jobs.
@@ -238,6 +242,143 @@ class TestReadJob:
 
         assert "job_posting" in result["sections"]
         assert "section_errors" not in result
+
+
+class TestReadJobAnswersApplyUrlAndApplicants:
+    """Both keys come off the page and text `read_job` already has."""
+
+    URL = "https://www.linkedin.com/jobs/view/12345/"
+
+    @classmethod
+    def _capturing(cls, reader, text, page=None, landed=None):
+        """Stand in for the capture, leaving the page where it leaves it.
+
+        The capture navigates to the posting, so a double that does not move
+        the page would let the landing guard in `read_job` refuse every
+        posting here for sitting on the fixture's default profile URL.
+        """
+        if page is not None:
+            page.url = landed or cls.URL
+        return patch.object(
+            reader._capture,
+            "capture",
+            new_callable=AsyncMock,
+            return_value=extracted(text),
+        )
+
+    @staticmethod
+    def _applying(reader, **kwargs):
+        return patch.object(
+            reader._pages,
+            "read_apply_on_current_page",
+            new_callable=AsyncMock,
+            **kwargs,
+        )
+
+    async def test_an_external_posting_answers_the_employer_link(self, mock_page):
+        reader = _reader(mock_page)
+        text = "Engineer\nZurich · 32 applicants\nAbout the job\nBuild agents."
+        read = JobApplyRead("external", "https://jobs.example.com/1")
+        with self._capturing(reader, text, mock_page):
+            with self._applying(reader, return_value=read) as reading:
+                result = await reader.read_job("12345")
+
+        # The posting already open, so the address is passed but never visited.
+        reading.assert_awaited_once_with(self.URL, "12345", JOB_APPLY_EN_US)
+        assert result["apply"] == {
+            "type": "external",
+            "url": "https://jobs.example.com/1",
+        }
+        # The flat key repeats the nested one for callers written before it.
+        assert result["apply_url"] == "https://jobs.example.com/1"
+        assert result["applicant_count"] == 32
+
+    async def test_easy_apply_has_no_employer_link(self, mock_page):
+        reader = _reader(mock_page)
+        text = "Engineer\nZurich · 4 applicants\nAbout the job\nBuild agents."
+        with self._capturing(reader, text, mock_page):
+            with self._applying(reader, return_value=JobApplyRead("easy_apply")):
+                result = await reader.read_job("12345")
+
+        # No URL, but said so for a reason: nothing to ask again for.
+        assert result["apply"] == {"type": "easy_apply"}
+        assert result["apply_url"] is None
+        assert result["applicant_count"] == 4
+
+    @pytest.mark.parametrize(
+        ("state", "expected"),
+        [
+            ("Application submitted", "applied"),
+            ("No longer accepting applications", "closed"),
+        ],
+    )
+    async def test_a_settled_posting_is_not_asked_for_an_apply_link(
+        self, mock_page, state, expected
+    ):
+        """Its text already said so, and it renders no control to wait for."""
+        reader = _reader(mock_page)
+        text = f"Engineer\n{state}\nZurich · 7 applicants\nAbout the job\nx"
+        with self._capturing(reader, text, mock_page):
+            with self._applying(reader) as reading:
+                result = await reader.read_job("12345")
+
+        reading.assert_not_awaited()
+        # Answered from the text alone, so the type arrives without the read.
+        assert result["apply"] == {"type": expected}
+        assert result["apply_url"] is None
+        assert result["applicant_count"] == 7
+
+    async def test_an_unreadable_apply_control_loses_only_the_link(self, mock_page):
+        """A job's details are still worth answering without its link."""
+        reader = _reader(mock_page)
+        text = "Engineer\nZurich · 12 applicants\nAbout the job\nBuild agents."
+        with self._capturing(reader, text, mock_page):
+            with self._applying(reader, side_effect=RuntimeError("context destroyed")):
+                result = await reader.read_job("12345")
+
+        # `unknown`, not `easy_apply`: this one is worth asking about again.
+        assert result["apply"] == {"type": "unknown"}
+        assert result["apply_url"] is None
+        assert result["applicant_count"] == 12
+        assert result["sections"]["job_posting"] == text
+
+    async def test_an_expired_session_still_reaches_the_relogin_path(self, mock_page):
+        reader = _reader(mock_page)
+        text = "Engineer\nZurich · 12 applicants\nAbout the job\nBuild agents."
+        with self._capturing(reader, text, mock_page):
+            with self._applying(reader, side_effect=AuthenticationError("expired")):
+                with pytest.raises(AuthenticationError):
+                    await reader.read_job("12345")
+
+    async def test_a_capture_that_landed_elsewhere_is_not_read_for_a_link(
+        self, mock_page
+    ):
+        """Another page's Apply would otherwise answer as this job's."""
+        reader = _reader(mock_page)
+        elsewhere = "https://www.linkedin.com/jobs/collections/recommended/"
+        text = "Engineer\nZurich · 3 applicants\nAbout the job\nBuild agents."
+        with self._capturing(reader, text, mock_page, landed=elsewhere):
+            with self._applying(reader) as reading:
+                result = await reader.read_job("12345")
+
+        reading.assert_not_awaited()
+        assert result["apply"] == {"type": "unknown"}
+        assert result["apply_url"] is None
+        # The text is this job's capture, so its figure still counts.
+        assert result["applicant_count"] == 3
+
+    async def test_a_posting_that_never_rendered_answers_both_as_null(self, mock_page):
+        reader = _reader(mock_page)
+        with self._capturing(reader, "", mock_page):
+            with self._applying(reader) as reading:
+                result = await reader.read_job("12345")
+
+        reading.assert_not_awaited()
+        # No posting captured, so nothing is known about how it applies: the
+        # key goes absent rather than claiming `unknown` about a page unread.
+        assert "apply" not in result
+        assert result["apply_url"] is None
+        assert result["applicant_count"] is None
 
 
 class TestGetJobApplyUrl:
