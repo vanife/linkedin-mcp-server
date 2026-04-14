@@ -17,7 +17,9 @@ from linkedin_mcp_server.scraping.extractor import (
     ExtractedSection,
     LinkedInExtractor,
     _RATE_LIMITED_MSG,
+    _strip_utm,
     _truncate_linkedin_noise,
+    _unwrap_linkedin_redirect,
     strip_linkedin_noise,
 )
 from linkedin_mcp_server.scraping.link_metadata import Reference
@@ -1234,8 +1236,55 @@ class TestScrapeCompany:
         assert result["sections"]["posts"] == "Posts text"
 
 
+class TestStripUtm:
+    def test_strips_utm_params(self):
+        url = "https://example.com/apply?utm_source=linkedin&utm_medium=job&id=42"
+        assert _strip_utm(url) == "https://example.com/apply?id=42"
+
+    def test_keeps_non_utm_params(self):
+        url = "https://example.com/apply?ref=linkedin&id=42"
+        assert _strip_utm(url) == "https://example.com/apply?ref=linkedin&id=42"
+
+    def test_strips_all_utm_variants(self):
+        url = "https://example.com/apply?utm_source=x&utm_medium=y&utm_campaign=z&utm_term=a&utm_content=b"
+        assert _strip_utm(url) == "https://example.com/apply"
+
+    def test_no_params(self):
+        url = "https://example.com/apply"
+        assert _strip_utm(url) == "https://example.com/apply"
+
+
+class TestUnwrapLinkedinRedirect:
+    def test_unwraps_safety_go_redirect(self):
+        url = (
+            "https://www.linkedin.com/safety/go/"
+            "?url=https%3A%2F%2Fexample.com%2Fapply%3Fid%3D42"
+            "&urlhash=PdLP&isSdui=true"
+        )
+        assert _unwrap_linkedin_redirect(url) == "https://example.com/apply?id=42"
+
+    def test_unwraps_and_strips_utm(self):
+        url = (
+            "https://www.linkedin.com/safety/go/"
+            "?url=https%3A%2F%2Fexample.com%2Fapply%3Futm_source%3Dlinkedin%26id%3D42"
+        )
+        assert _unwrap_linkedin_redirect(url) == "https://example.com/apply?id=42"
+
+    def test_passthrough_non_redirect(self):
+        url = "https://example.com/apply?id=42&utm_source=linkedin"
+        assert _unwrap_linkedin_redirect(url) == "https://example.com/apply?id=42"
+
+    def test_passthrough_no_url_param(self):
+        url = "https://www.linkedin.com/safety/go/?otherparam=value"
+        assert (
+            _unwrap_linkedin_redirect(url)
+            == "https://www.linkedin.com/safety/go/?otherparam=value"
+        )
+
+
 class TestScrapeJob:
     async def test_scrape_job(self, mock_page):
+        mock_page.evaluate = AsyncMock(side_effect=[None, None])
         extractor = LinkedInExtractor(mock_page)
         with patch.object(
             extractor,
@@ -1247,10 +1296,13 @@ class TestScrapeJob:
 
         assert result["url"] == "https://www.linkedin.com/jobs/view/12345/"
         assert "job_posting" in result["sections"]
+        assert result["apply_url"] is None
+        assert result["applicant_count"] is None
         assert "pages_visited" not in result
         assert "sections_requested" not in result
 
     async def test_scrape_job_omits_rate_limited_sentinel(self, mock_page):
+        mock_page.evaluate = AsyncMock(side_effect=[None, None])
         extractor = LinkedInExtractor(mock_page)
         with patch.object(
             extractor,
@@ -1265,6 +1317,7 @@ class TestScrapeJob:
     async def test_scrape_job_omits_orphaned_references_when_text_empty(
         self, mock_page
     ):
+        mock_page.evaluate = AsyncMock(side_effect=[None, None])
         extractor = LinkedInExtractor(mock_page)
         with patch.object(
             extractor,
@@ -1279,6 +1332,62 @@ class TestScrapeJob:
 
         assert result["sections"] == {}
         assert "references" not in result
+
+    async def test_scrape_job_with_external_apply_url(self, mock_page):
+        mock_page.evaluate = AsyncMock(
+            side_effect=["https://example.com/apply?utm_source=linkedin&id=42", None]
+        )
+        extractor = LinkedInExtractor(mock_page)
+        with patch.object(
+            extractor,
+            "extract_page",
+            new_callable=AsyncMock,
+            return_value=extracted("Job: Engineer"),
+        ):
+            result = await extractor.scrape_job("12345")
+
+        assert result["apply_url"] == "https://example.com/apply?id=42"
+        assert result["applicant_count"] is None
+
+    async def test_scrape_job_with_applicant_count(self, mock_page):
+        mock_page.evaluate = AsyncMock(side_effect=[None, "17 people clicked apply"])
+        extractor = LinkedInExtractor(mock_page)
+        with patch.object(
+            extractor,
+            "extract_page",
+            new_callable=AsyncMock,
+            return_value=extracted("Job: Engineer"),
+        ):
+            result = await extractor.scrape_job("12345")
+
+        assert result["apply_url"] is None
+        assert result["applicant_count"] == 17
+
+    async def test_scrape_job_with_over_applicants(self, mock_page):
+        mock_page.evaluate = AsyncMock(side_effect=[None, "200 applicants"])
+        extractor = LinkedInExtractor(mock_page)
+        with patch.object(
+            extractor,
+            "extract_page",
+            new_callable=AsyncMock,
+            return_value=extracted("Job: Engineer"),
+        ):
+            result = await extractor.scrape_job("12345")
+
+        assert result["applicant_count"] == 200
+
+    async def test_scrape_job_easy_apply_returns_null_url(self, mock_page):
+        mock_page.evaluate = AsyncMock(side_effect=[None, None])
+        extractor = LinkedInExtractor(mock_page)
+        with patch.object(
+            extractor,
+            "extract_page",
+            new_callable=AsyncMock,
+            return_value=extracted("Job: Engineer"),
+        ):
+            result = await extractor.scrape_job("12345")
+
+        assert result["apply_url"] is None
 
 
 class TestSearchJobs:

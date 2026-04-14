@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import logging
 import re
 from typing import TYPE_CHECKING, Any, Literal
-from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
+from urllib.parse import parse_qs, quote_plus, urlencode, urljoin, urlparse, urlunparse
 
 from patchright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
@@ -141,6 +141,36 @@ def _normalize_csv(value: str, mapping: dict[str, str]) -> str:
     """Normalize a comma-separated filter value using the provided mapping."""
     parts = [v.strip() for v in value.split(",")]
     return ",".join(mapping.get(p, p) for p in parts)
+
+
+_UTM_PARAMS = frozenset(
+    {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"}
+)
+
+
+def _strip_utm(url: str) -> str:
+    """Strip UTM query parameters from a URL, keeping other params."""
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    filtered = {k: v for k, v in params.items() if k not in _UTM_PARAMS}
+    cleaned_query = urlencode(filtered, doseq=True)
+    return urlunparse(parsed._replace(query=cleaned_query))
+
+
+def _unwrap_linkedin_redirect(url: str) -> str:
+    """Unwrap LinkedIn redirect URLs and strip UTM params.
+
+    LinkedIn wraps external apply links as
+    ``/safety/go/?url=<encoded_url>&…``.  Extract the target URL from
+    the ``url`` query parameter when present, then strip UTM params.
+    """
+    parsed = urlparse(url)
+    if "/safety/go" in parsed.path:
+        params = parse_qs(parsed.query)
+        targets = params.get("url")
+        if targets:
+            return _strip_utm(targets[0])
+    return _strip_utm(url)
 
 
 # Patterns that mark the start of LinkedIn page chrome (sidebar/footer).
@@ -1836,7 +1866,7 @@ class LinkedInExtractor:
         """Scrape a single job posting.
 
         Returns:
-            {url, sections: {name: text}}
+            {url, apply_url, applicant_count, sections: {name: text}}
         """
         url = f"https://www.linkedin.com/jobs/view/{job_id}/"
         extracted = await self.extract_page(url, section_name="job_posting")
@@ -1851,8 +1881,13 @@ class LinkedInExtractor:
         elif extracted.error:
             section_errors["job_posting"] = extracted.error
 
+        apply_url = await self._extract_apply_url()
+        applicant_count = await self._extract_applicant_count()
+
         result: dict[str, Any] = {
             "url": url,
+            "apply_url": apply_url,
+            "applicant_count": applicant_count,
             "sections": sections,
         }
         if references:
@@ -1860,6 +1895,64 @@ class LinkedInExtractor:
         if section_errors:
             result["section_errors"] = section_errors
         return result
+
+    async def _extract_apply_url(self) -> str | None:
+        """Extract the external apply URL from the job page.
+
+        Returns the href of the Apply button if it links externally,
+        or None for Easy Apply (application stays on LinkedIn).
+        """
+        href: str | None = await self._page.evaluate(
+            """() => {
+                // Direct selector for LinkedIn's external-redirect links.
+                const redirect = document.querySelector(
+                    'a[href*="/safety/go/"]'
+                );
+                if (redirect && redirect.href) return redirect.href;
+
+                // Legacy selectors for older LinkedIn layouts.
+                const btns = document.querySelectorAll(
+                    'a[href*="externalApply"], a[href*="applyWithLinkedIn"]'
+                );
+                for (const a of btns) {
+                    if (a.href && !a.href.includes('linkedin.com'))
+                        return a.href;
+                }
+                const apply = document.querySelector(
+                    '.jobs-apply-button, [data-job-id] a[href]'
+                );
+                if (apply && apply.href
+                    && !apply.href.includes('linkedin.com')) {
+                    return apply.href;
+                }
+                return null;
+            }"""
+        )
+        if href:
+            return _unwrap_linkedin_redirect(href)
+        return None
+
+    async def _extract_applicant_count(self) -> int | None:
+        """Extract the applicant/click count from the job page.
+
+        Parses text like "17 people clicked apply", "Over 200 applicants",
+        or "X applicants". Returns the numeric value or None.
+        """
+        text: str | None = await self._page.evaluate(
+            r"""() => {
+                const main = document.querySelector('main');
+                if (!main) return null;
+                const content = main.innerText;
+                const match = content.match(
+                    /(\d[\d,]*)\s*(?:people clicked apply|applicants?|clicks?)/i
+                );
+                return match ? match[0] : null;
+            }"""
+        )
+        if not text:
+            return None
+        m = re.search(r"(\d[\d,]*)", text)
+        return int(m.group(1).replace(",", "")) if m else None
 
     async def _extract_job_ids(self) -> list[str]:
         """Extract unique job IDs from job card links on the current page.

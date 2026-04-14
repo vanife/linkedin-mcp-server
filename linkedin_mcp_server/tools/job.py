@@ -41,7 +41,9 @@ def register_job_tools(mcp: FastMCP) -> None:
             ctx: FastMCP context for progress reporting
 
         Returns:
-            Dict with url, sections (name -> raw text), and optional references.
+            Dict with url, apply_url (external application URL or null for
+            Easy Apply), applicant_count (number of applicants or null),
+            sections (name -> raw text), and optional references.
             The LLM should parse the raw text to extract job details.
         """
         try:
