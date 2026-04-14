@@ -323,6 +323,23 @@ class JobPageReader:
         host to whatever the host can reach.
         """
         await self._navigator._navigate_to_page(url)
+        return await self.read_apply_on_current_page(url, job_id, text)
+
+    async def read_apply_on_current_page(
+        self, url: str, job_id: str, text: JobApplyTextTable
+    ) -> JobApplyRead:
+        """The same reading, on the posting already open in the browser.
+
+        Split out so `read_job` can answer the employer's link from the page
+        it just captured instead of navigating to it a second time. The wait
+        below is what makes that nearly free: a posting renders its apply
+        control before its description panel, and a capture that waited for
+        the panel has therefore already rendered the control.
+
+        `url` is used for diagnostics and the auth-barrier check only; this
+        never navigates, so passing an address the browser is not on would
+        describe the wrong page.
+        """
         await self._session.check_rate_limit()
         page = self._session.page
         opts = {

@@ -53,6 +53,11 @@ def register_job_tools(
             A posting that shows it was applied to or has closed also carries
             apply: {type: "applied" | "closed"}; no apply key means neither
             was read, not that the posting is open.
+            apply_url is the employer's application link for an external
+            posting and null otherwise, read from the same page without a
+            second navigation; applicant_count is the posting's applicant or
+            clicked-apply figure read from the captured text, or null when it
+            names none. Both are always present.
         """
         job_id = normalize_job_id(job_id)
         extractor = await get_ready_extractor(ctx, tool_name="get_job_details")

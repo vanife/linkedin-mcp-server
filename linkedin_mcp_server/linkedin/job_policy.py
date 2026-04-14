@@ -12,7 +12,7 @@ from linkedin_mcp_server.linkedin.link_metadata import (
     Reference,
     _SEARCH_RESULTS_REFERENCE_CAP,
 )
-from linkedin_mcp_server.linkedin.text import JobApplyTextTable
+from linkedin_mcp_server.linkedin.text import JobApplicantsTextTable, JobApplyTextTable
 
 
 def reconcile_search_references(
@@ -283,6 +283,31 @@ def posting_state(
         return "applied"
     if any(line in table.closed_lines for line in top):
         return "closed"
+    return None
+
+
+def applicant_count(text: str, table: JobApplicantsTextTable) -> int | None:
+    """The applicant figure a posting's captured text shows above its description.
+
+    Read from the text `get_job_details` already captured, on the same lines
+    and against the same boundary as `posting_state`, so it costs no
+    navigation and no DOM query. None covers a posting that names no figure
+    and a capture without any of its description headings alike: above the
+    earliest heading is the only place the figure is this posting's, and
+    without one there is no boundary.
+    """
+    lines = [line.strip() for line in text.splitlines()]
+    end = next(
+        (i for i, line in enumerate(lines) if line in table.description_headings),
+        None,
+    )
+    if end is None:
+        return None
+    for line in lines[:end]:
+        for pattern in table.applicant_patterns:
+            match = pattern.search(line)
+            if match:
+                return int(match.group(1).replace(",", ""))
     return None
 
 
