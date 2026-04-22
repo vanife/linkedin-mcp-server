@@ -45,6 +45,7 @@ def _make_mock_extractor(result: dict) -> MagicMock:
     mock.search_companies = AsyncMock(return_value=result)
     mock.search_posts = AsyncMock(return_value=result)
     mock.get_company_employees = AsyncMock(return_value=result)
+    mock.get_catchup = AsyncMock(return_value=result)
     mock.extract_page = AsyncMock(
         return_value=ExtractedSection(text="some text", references=[])
     )
@@ -52,7 +53,7 @@ def _make_mock_extractor(result: dict) -> MagicMock:
     return mock
 
 
-_TOOL_MODULES = ("person", "company", "job", "messaging", "feed", "post")
+_TOOL_MODULES = ("person", "company", "job", "messaging", "feed", "post", "network")
 
 
 @pytest.fixture
@@ -248,6 +249,7 @@ _A_VALID_CALL = [
     ),
     ("feed", "get_feed", {}),
     ("post", "search_posts", {"keywords": "python"}),
+    ("network", "get_catchup", {"filter_type": "birthday"}),
 ]
 
 
@@ -2688,6 +2690,7 @@ class TestToolTimeouts:
             "send_message",
             "get_feed",
             "search_posts",
+            "get_catchup",
             "close_session",
         )
 
@@ -2695,3 +2698,54 @@ class TestToolTimeouts:
             tool = await mcp.get_tool(name)
             assert tool is not None
             assert tool.timeout == DEFAULT_TOOL_TIMEOUT_SECONDS
+
+
+class TestNetworkTools:
+    @staticmethod
+    def _registered():
+        from linkedin_mcp_server.tools.network import register_network_tools
+
+        mcp = FastMCP("test")
+        register_network_tools(mcp)
+        return mcp
+
+    async def test_get_catchup_birthday(self, mock_context, serve_extractor):
+        expected = {
+            "url": "https://www.linkedin.com/mynetwork/catch-up/birthdays/",
+            "retrieved_at": "2026-04-22T13:00:00Z",
+            "birthdays": [
+                {
+                    "name": "Jane Doe",
+                    "profile_url": "https://www.linkedin.com/in/janedoe/",
+                    "birthday": "0000-04-22",
+                    "birthday_text": "today",
+                    "original_text": "Jane Doe Celebrate Jane's birthday today",
+                }
+            ],
+        }
+        mock_extractor = MagicMock()
+        mock_extractor.get_catchup = AsyncMock(return_value=expected)
+
+        mcp = self._registered()
+        serve_extractor(mock_extractor)
+        tool_fn = await get_tool_fn(mcp, "get_catchup")
+        result = await tool_fn(mock_context, filter_type="birthday")
+
+        assert result == expected
+        mock_extractor.get_catchup.assert_awaited_once_with(filter_type="birthday")
+
+    async def test_get_catchup_reads_the_same_page_unfiltered(
+        self, mock_context, serve_extractor
+    ):
+        """Omitting the filter is the birthdays route, not a different read."""
+        mock_extractor = MagicMock()
+        mock_extractor.get_catchup = AsyncMock(
+            return_value={"url": "", "retrieved_at": "", "birthdays": []}
+        )
+
+        mcp = self._registered()
+        serve_extractor(mock_extractor)
+        tool_fn = await get_tool_fn(mcp, "get_catchup")
+        await tool_fn(mock_context)
+
+        mock_extractor.get_catchup.assert_awaited_once_with(filter_type=None)

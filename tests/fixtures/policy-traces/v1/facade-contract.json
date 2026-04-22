@@ -28,6 +28,10 @@
         "coroutine": true,
         "signature": "(self, url: 'str', section_name: 'str', max_scrolls: 'int | None' = None) -> 'ExtractedSection'"
       },
+      "get_catchup": {
+        "coroutine": true,
+        "signature": "(self, filter_type: 'str | None' = None) -> 'dict[str, Any]'"
+      },
       "get_company_employees": {
         "coroutine": true,
         "signature": "(self, company_name: 'str', keywords: 'str | None' = None) -> 'dict[str, Any]'"
@@ -101,6 +105,7 @@
       "connect_with_person",
       "extract_feed",
       "extract_page",
+      "get_catchup",
       "get_company_employees",
       "get_conversation",
       "get_inbox",
@@ -154,6 +159,30 @@
           "required": [
             "linkedin_username"
           ],
+          "type": "object"
+        },
+        "output": {
+          "additionalProperties": true,
+          "type": "object"
+        }
+      },
+      "get_catchup": {
+        "input": {
+          "additionalProperties": false,
+          "properties": {
+            "filter_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Event kind to read. Only \"birthday\" is supported;\nomitting it reads the same page."
+            }
+          },
           "type": "object"
         },
         "output": {

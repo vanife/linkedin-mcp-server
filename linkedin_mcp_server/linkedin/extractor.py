@@ -23,6 +23,7 @@ from linkedin_mcp_server.linkedin.job_policy import JobsTrackerStage
 from linkedin_mcp_server.linkedin.jobs import JobReader
 from linkedin_mcp_server.linkedin.message_sender import MessageSender
 from linkedin_mcp_server.linkedin.navigation import PageNavigator
+from linkedin_mcp_server.linkedin.network import NetworkReader
 from linkedin_mcp_server.linkedin.person import PersonReader
 from linkedin_mcp_server.linkedin.posts import PostSearch
 from linkedin_mcp_server.linkedin.profile_page import ProfilePageReader
@@ -69,6 +70,7 @@ class LinkedInExtractor:
         self._conversations = ConversationReader(
             session, navigator, content, profile_page
         )
+        self._network = NetworkReader(session, navigator, content)
 
     async def get_page_text(self) -> str:
         """Extract innerText from the main content area of the current page."""
@@ -161,6 +163,10 @@ class LinkedInExtractor:
     async def get_job_apply_url(self, job_id: str) -> dict[str, Any]:
         """Read how a job posting takes applications and the employer's link."""
         return await self._jobs.get_job_apply_url(job_id)
+
+    async def get_catchup(self, filter_type: str | None = None) -> dict[str, Any]:
+        """Read the network events on the catch-up page."""
+        return await self._network.get_catchup(filter_type=filter_type)
 
     async def search_jobs(
         self,

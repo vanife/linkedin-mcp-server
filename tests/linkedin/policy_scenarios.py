@@ -924,6 +924,42 @@ async def _job_apply_scenario() -> dict[str, Any]:
     )
 
 
+async def _catchup_scenario() -> dict[str, Any]:
+    """One birthday card, carrying the date it names.
+
+    A written date on purpose rather than "today": the relative labels are
+    resolved against the moment of the read, so a card bearing one would date
+    itself differently every day and no fixture could match it. The relative
+    path is covered by `tests/linkedin/test_network.py` instead, which can fix
+    that moment.
+    """
+    recorder = TraceRecorder("get_catchup__birthday", _COMMON_ALLOWED)
+    clock = FakeClock(recorder)
+    page = _page(recorder).script(
+        "evaluate:catchup_cards",
+        [
+            {
+                "path": "/in/ada-lovelace/",
+                "name": "Ada Lovelace",
+                "text": "Celebrate Ada's recent birthday on Apr 17",
+            }
+        ],
+    )
+    extractor = _extractor(page)
+    arguments = {"filter_type": "birthday"}
+    async with boundaries(recorder, clock):
+        with recorder.context("get_catchup"):
+            result = await extractor.get_catchup(**arguments)
+    page.assert_clean()
+    # `retrieved_at` is the wall clock, so the trace records that the answer
+    # carries one rather than which one: a recorded timestamp would differ on
+    # every run.
+    return recorder.trace(
+        {"method": "get_catchup", "arguments": arguments},
+        {**result, "retrieved_at": "<read>"},
+    )
+
+
 async def _get_my_profile_scenario() -> dict[str, Any]:
     name = "get_my_profile__baseline"
     recorder = TraceRecorder(name, _COMMON_ALLOWED)
@@ -1097,6 +1133,7 @@ TOOL_FACADE_METHODS = {
     "connect_with_person",
     "extract_feed",
     "extract_page",
+    "get_catchup",
     "get_company_employees",
     "get_conversation",
     "get_inbox",
@@ -1185,6 +1222,7 @@ async def build_policy_traces() -> dict[str, dict[str, Any]]:
         "read-job-error.json": await _single_capture_error_scenario(),
         "read-job-description-missing.json": await _description_missing_scenario(),
         "job-apply-url.json": await _job_apply_scenario(),
+        "catchup-birthdays.json": await _catchup_scenario(),
         "search-people.json": await _single_capture_facade_scenario("search_people"),
         "search-companies.json": await _single_capture_facade_scenario(
             "search_companies"

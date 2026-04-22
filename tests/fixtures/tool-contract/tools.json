@@ -73,6 +73,44 @@
     "_meta": {
       "fastmcp": {
         "tags": [
+          "network"
+        ]
+      }
+    },
+    "annotations": {
+      "openWorldHint": true,
+      "readOnlyHint": true
+    },
+    "description": "Get the network events on LinkedIn's Catch Up page.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "filter_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Event kind to read. Only \"birthday\" is supported;\nomitting it reads the same page."
+        }
+      },
+      "type": "object"
+    },
+    "name": "get_catchup",
+    "outputSchema": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "title": "Get Catch-Up"
+  },
+  {
+    "_meta": {
+      "fastmcp": {
+        "tags": [
           "company"
         ]
       }
