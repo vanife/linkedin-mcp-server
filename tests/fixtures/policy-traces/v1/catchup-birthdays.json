@@ -1,0 +1,111 @@
+{
+  "call": {
+    "arguments": {
+      "filter_type": "birthday"
+    },
+    "method": "get_catchup"
+  },
+  "events": [
+    {
+      "call": "get_catchup",
+      "callback_id": "callback-1",
+      "event": "framenavigated",
+      "kind": "listener.add"
+    },
+    {
+      "call": "get_catchup",
+      "extra": {
+        "target_url": "https://www.linkedin.com/mynetwork/catch-up/birthdays/",
+        "wait_until": "domcontentloaded"
+      },
+      "kind": "boundary.trace",
+      "label": "extractor-before-goto"
+    },
+    {
+      "call": "get_catchup",
+      "kind": "navigate",
+      "landed_url": "https://www.linkedin.com/mynetwork/catch-up/birthdays/",
+      "requested_url": "https://www.linkedin.com/mynetwork/catch-up/birthdays/",
+      "timeout_ms": 30000,
+      "wait_until": "domcontentloaded"
+    },
+    {
+      "call": "get_catchup",
+      "description": "goto https://www.linkedin.com/mynetwork/catch-up/birthdays/",
+      "kind": "boundary.stabilize",
+      "result": null
+    },
+    {
+      "call": "get_catchup",
+      "extra": {
+        "target_url": "https://www.linkedin.com/mynetwork/catch-up/birthdays/",
+        "wait_until": "domcontentloaded"
+      },
+      "kind": "boundary.trace",
+      "label": "extractor-after-goto"
+    },
+    {
+      "call": "get_catchup",
+      "kind": "boundary.auth_quick",
+      "result": null
+    },
+    {
+      "call": "get_catchup",
+      "callback_id": "callback-1",
+      "event": "framenavigated",
+      "kind": "listener.remove"
+    },
+    {
+      "call": "get_catchup",
+      "kind": "boundary.rate_limit"
+    },
+    {
+      "call": "get_catchup",
+      "kind": "wait_for_selector",
+      "operation": "main",
+      "selector": "main",
+      "state": "visible",
+      "timeout_ms": 8000.0
+    },
+    {
+      "call": "get_catchup",
+      "dismissed": false,
+      "kind": "boundary.modal"
+    },
+    {
+      "arg": null,
+      "call": "get_catchup",
+      "kind": "wait_for_function",
+      "operation": "main_text_100",
+      "program_digest": "246c5e96e441",
+      "timeout_ms": 10000.0
+    },
+    {
+      "arg": {
+        "eventWords": [
+          "birthday",
+          "born"
+        ]
+      },
+      "call": "get_catchup",
+      "kind": "evaluate",
+      "operation": "catchup_cards",
+      "program_digest": "e002e9808cb5"
+    }
+  ],
+  "result": {
+    "birthdays": [
+      {
+        "birthday": "0000-04-17",
+        "birthday_text": "Apr 17",
+        "name": "Ada Lovelace",
+        "original_text": "Celebrate Ada's recent birthday on Apr 17",
+        "profile_url": "https://www.linkedin.com/in/ada-lovelace/"
+      }
+    ],
+    "retrieved_at": "<read>",
+    "url": "https://www.linkedin.com/mynetwork/catch-up/birthdays/"
+  },
+  "scenario": "get_catchup__birthday",
+  "schema_version": 1
+}

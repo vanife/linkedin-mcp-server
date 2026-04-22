@@ -695,6 +695,9 @@ def semantic_program_id(program: str) -> str:
         ("promoted.push(id)", "job_promoted_ids"),
         ("signals.bounded && (signals.easy_apply", "job_apply_ready"),
         ("descriptionHeadings, closedLines", "job_apply_signals"),
+        # Before the generic `/in/` markers below: a catch-up card is found by
+        # the profile link it holds, so this program matches those too.
+        ("opts.eventWords.some", "catchup_cards"),
         ("const heading = document.querySelector('main h1')", "profile_display_name"),
         ("main li label[aria-label]", "conversation_thread_refs"),
         ("isScrollable", "scroll_main_region"),

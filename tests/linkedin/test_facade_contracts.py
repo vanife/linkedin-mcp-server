@@ -46,6 +46,7 @@ from .support.policy_trace import ScriptedPage, TraceRecorder
 
 TOOL_DELEGATES = {
     "connect_with_person": "connect_with_person",
+    "get_catchup": "get_catchup",
     "get_company_employees": "get_company_employees",
     "get_company_posts": "extract_page",
     "get_company_profile": "read_company",
@@ -100,6 +101,7 @@ async def test_constructor_export_and_dependency_use_the_same_facade(monkeypatch
         "_feed",
         "_jobs",
         "_message_sender",
+        "_network",
         "_person",
         "_posts",
     }
