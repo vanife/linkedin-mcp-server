@@ -17,6 +17,7 @@ from linkedin_mcp_server.scraping.extractor import (
     ExtractedSection,
     LinkedInExtractor,
     _RATE_LIMITED_MSG,
+    _parse_birthday,
     _strip_utm,
     _truncate_linkedin_noise,
     _unwrap_linkedin_redirect,
@@ -3506,3 +3507,55 @@ class TestSendMessageComposerInteraction:
         assert result["status"] == "sent"
         # Enter was pressed as fallback
         mock_keyboard.press.assert_awaited_once_with("Enter")
+
+
+class TestParseBirthday:
+    """Tests for the _parse_birthday helper."""
+
+    RETRIEVED_AT = "2026-04-22T13:00:00Z"
+
+    def test_today(self):
+        iso, label = _parse_birthday(
+            "Celebrate John's birthday today", self.RETRIEVED_AT
+        )
+        assert iso == "0000-04-22"
+        assert label == "today"
+
+    def test_yesterday(self):
+        iso, label = _parse_birthday(
+            "Celebrate John's birthday yesterday", self.RETRIEVED_AT
+        )
+        assert iso == "0000-04-21"
+        assert label == "yesterday"
+
+    def test_yesterday_crosses_month(self):
+        iso, label = _parse_birthday("birthday yesterday", "2026-05-01T00:00:00Z")
+        assert iso == "0000-04-30"
+        assert label == "yesterday"
+
+    def test_month_day(self):
+        iso, label = _parse_birthday(
+            "Celebrate Kaspar's recent birthday on Apr 17", self.RETRIEVED_AT
+        )
+        assert iso == "0000-04-17"
+        assert label == "Apr 17"
+
+    def test_day_month(self):
+        iso, label = _parse_birthday("birthday on 17 Apr", self.RETRIEVED_AT)
+        assert iso == "0000-04-17"
+        assert label == "17 Apr"
+
+    def test_full_month_name(self):
+        iso, label = _parse_birthday("birthday on April 3", self.RETRIEVED_AT)
+        assert iso == "0000-04-03"
+        assert label == "April 3"
+
+    def test_no_date(self):
+        iso, label = _parse_birthday("Wishing you a happy birthday!", self.RETRIEVED_AT)
+        assert iso is None
+        assert label == ""
+
+    def test_today_takes_precedence_over_date_in_text(self):
+        iso, label = _parse_birthday("Apr 22 birthday today", self.RETRIEVED_AT)
+        assert label == "today"
+        assert iso == "0000-04-22"

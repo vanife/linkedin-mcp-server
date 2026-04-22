@@ -766,3 +766,58 @@ class TestToolTimeouts:
             tool = await mcp.get_tool(name)
             assert tool is not None
             assert tool.timeout == TOOL_TIMEOUT_SECONDS
+
+
+class TestNetworkTools:
+    async def test_get_catchup_birthday(self, mock_context):
+        expected = {
+            "url": "https://www.linkedin.com/mynetwork/catch-up/birthdays/",
+            "retrieved_at": "2026-04-22T13:00:00Z",
+            "birthdays": [
+                {
+                    "name": "Jane Doe",
+                    "profile_url": "https://www.linkedin.com/in/janedoe/",
+                    "birthday": "0000-04-22",
+                    "birthday_text": "today",
+                    "original_text": "Jane Doe Celebrate Jane's birthday today",
+                }
+            ],
+        }
+        mock_extractor = _make_mock_extractor({})
+        mock_extractor.get_catchup = AsyncMock(return_value=expected)
+
+        from linkedin_mcp_server.tools.network import register_network_tools
+
+        mcp = FastMCP("test")
+        register_network_tools(mcp)
+
+        tool_fn = await get_tool_fn(mcp, "get_catchup")
+        result = await tool_fn(
+            mock_context, filter_type="birthday", extractor=mock_extractor
+        )
+
+        assert result["retrieved_at"] == "2026-04-22T13:00:00Z"
+        assert len(result["birthdays"]) == 1
+        assert result["birthdays"][0]["name"] == "Jane Doe"
+        assert result["birthdays"][0]["birthday"] == "0000-04-22"
+        mock_extractor.get_catchup.assert_awaited_once_with(
+            filter_type="birthday",
+            callbacks=mock_extractor.get_catchup.call_args.kwargs["callbacks"],
+        )
+
+    async def test_get_catchup_passes_callbacks(self, mock_context):
+        mock_extractor = _make_mock_extractor({})
+        mock_extractor.get_catchup = AsyncMock(
+            return_value={"url": "", "retrieved_at": "", "birthdays": []}
+        )
+
+        from linkedin_mcp_server.tools.network import register_network_tools
+
+        mcp = FastMCP("test")
+        register_network_tools(mcp)
+
+        tool_fn = await get_tool_fn(mcp, "get_catchup")
+        await tool_fn(mock_context, filter_type="birthday", extractor=mock_extractor)
+
+        call_kwargs = mock_extractor.get_catchup.call_args.kwargs
+        assert isinstance(call_kwargs["callbacks"], MCPContextProgressCallback)

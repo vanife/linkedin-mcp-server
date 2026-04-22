@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import UTC, datetime
 import logging
 import re
 from typing import TYPE_CHECKING, Any, Literal
@@ -171,6 +172,60 @@ def _unwrap_linkedin_redirect(url: str) -> str:
         if targets:
             return _strip_utm(targets[0])
     return _strip_utm(url)
+
+
+_MONTH_MAP = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+
+# Matches "Apr 12", "April 12", "12 Apr", "12 April" (case-insensitive)
+_DATE_RE = re.compile(
+    r"\b(?:(?P<mname>[A-Za-z]{3,9})\s+(?P<d1>\d{1,2})|(?P<d2>\d{1,2})\s+(?P<mname2>[A-Za-z]{3,9}))\b"
+)
+
+
+def _parse_birthday(text: str, retrieved_at: str) -> tuple[str | None, str]:
+    """Parse a birthday date from catch-up card text.
+
+    Returns (birthday_iso, birthday_text) where:
+      - birthday_iso is "0000-MM-DD" (year unknown) or None if not parseable
+      - birthday_text is a human label like "today", "yesterday", or "Apr 12"
+    """
+    lower = text.lower()
+
+    if "today" in lower:
+        now = datetime.fromisoformat(retrieved_at.replace("Z", "+00:00"))
+        return f"0000-{now.month:02d}-{now.day:02d}", "today"
+
+    if "yesterday" in lower:
+        from datetime import timedelta
+
+        now = datetime.fromisoformat(retrieved_at.replace("Z", "+00:00"))
+        yesterday = now - timedelta(days=1)
+        return f"0000-{yesterday.month:02d}-{yesterday.day:02d}", "yesterday"
+
+    m = _DATE_RE.search(text)
+    if m:
+        mname = (m.group("mname") or m.group("mname2") or "").lower()[:3]
+        day_str = m.group("d1") or m.group("d2") or ""
+        month_num = _MONTH_MAP.get(mname)
+        if month_num and day_str:
+            day = int(day_str)
+            matched = m.group(0)
+            return f"0000-{month_num:02d}-{day:02d}", matched
+
+    return None, ""
 
 
 # Patterns that mark the start of LinkedIn page chrome (sidebar/footer).
@@ -2305,6 +2360,147 @@ class LinkedInExtractor:
             result["references"] = references
         if section_errors:
             result["section_errors"] = section_errors
+        return result
+
+    async def get_catchup(
+        self,
+        filter_type: str | None = None,
+        callbacks: "ProgressCallback | None" = None,
+    ) -> dict[str, Any]:
+        """Scrape the LinkedIn Catch Up page for network events.
+
+        Args:
+            filter_type: Optional filter — currently only "birthday" is supported.
+            callbacks: Optional progress callbacks.
+
+        Returns:
+            For filter_type="birthday":
+                {url, retrieved_at, birthdays: [{name, profile_url, birthday,
+                 birthday_text, original_text}]}
+        """
+        _SUPPORTED_FILTERS = {"birthday"}
+        if filter_type is not None and filter_type not in _SUPPORTED_FILTERS:
+            raise ValueError(
+                f"Unsupported filter_type {filter_type!r}. "
+                f"Supported values: {sorted(_SUPPORTED_FILTERS)}"
+            )
+
+        url = "https://www.linkedin.com/mynetwork/catch-up/birthdays/"
+
+        if callbacks:
+            await callbacks.on_start("catch-up", url)
+
+        await self._navigate_to_page(url)
+        await detect_rate_limit(self._page)
+
+        try:
+            await self._page.wait_for_selector("main", timeout=8000)
+        except PlaywrightTimeoutError:
+            logger.debug("No <main> element on catch-up page")
+
+        await handle_modal_close(self._page)
+
+        # Wait for list items to appear
+        try:
+            await self._page.wait_for_function(
+                "() => document.querySelector('main') && "
+                "document.querySelector('main').innerText.length > 100",
+                timeout=10000,
+            )
+        except PlaywrightTimeoutError:
+            logger.debug("Catch-up page content did not appear in time")
+
+        retrieved_at = (
+            datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        )
+
+        raw_items: list[dict[str, Any]] = await self._page.evaluate(
+            """() => {
+                const normalize = t => (t || '').replace(/\\s+/g, ' ').trim();
+
+                const extractPersonPath = href => {
+                    if (!href) return null;
+                    const idx = href.indexOf('/in/');
+                    if (idx === -1) return null;
+                    const rest = href.slice(idx + 4);
+                    const end = rest.search(/[/?#]/);
+                    const username = end === -1 ? rest : rest.slice(0, end);
+                    return username ? '/in/' + username + '/' : null;
+                };
+
+                // Each catch-up card is a list item or article containing a /in/ link
+                // and a text snippet like "Celebrate X's birthday" / "X has a birthday today"
+                const candidates = Array.from(
+                    document.querySelectorAll('main li, main article, main [data-view-name]')
+                );
+
+                // Fallback: grab any container that has a /in/ link + birthday text
+                const items = candidates.length ? candidates
+                    : Array.from(document.querySelectorAll('main > * > *'));
+
+                const results = [];
+                const seenUrls = new Set();
+
+                for (const item of items) {
+                    const link = item.querySelector('a[href*="/in/"]');
+                    if (!link) continue;
+
+                    const profilePath = extractPersonPath(link.getAttribute('href'));
+                    if (!profilePath || seenUrls.has(profilePath)) continue;
+
+                    const text = normalize(item.innerText || item.textContent);
+                    if (!text) continue;
+
+                    // Only keep items that mention birthday
+                    const lower = text.toLowerCase();
+                    if (!lower.includes('birthday') && !lower.includes('born')) continue;
+
+                    seenUrls.add(profilePath);
+
+                    // Best-effort name: aria-label on the link, or visible link text
+                    const nameRaw =
+                        link.getAttribute('aria-label') ||
+                        normalize(link.innerText || link.textContent) ||
+                        '';
+                    // Strip trailing noise like "• 1st" connection degree indicators
+                    const name = nameRaw.replace(/[•·].*$/, '').trim();
+
+                    results.push({ profilePath, name, text });
+                }
+                return results;
+            }"""
+        )
+
+        birthdays = []
+        for item in raw_items:
+            profile_path: str = item.get("profilePath", "")
+            name: str = item.get("name", "")
+            original_text: str = item.get("text", "")
+
+            birthday_str, birthday_text = _parse_birthday(original_text, retrieved_at)
+
+            profile_url = (
+                f"https://www.linkedin.com{profile_path}" if profile_path else None
+            )
+
+            entry: dict[str, Any] = {
+                "name": name,
+                "profile_url": profile_url,
+                "birthday": birthday_str,
+                "birthday_text": birthday_text,
+                "original_text": original_text,
+            }
+            birthdays.append(entry)
+
+        result: dict[str, Any] = {
+            "url": url,
+            "retrieved_at": retrieved_at,
+            "birthdays": birthdays,
+        }
+
+        if callbacks:
+            await callbacks.on_complete("catch-up", result)
+
         return result
 
     async def get_inbox(self, limit: int = 20) -> dict[str, Any]:
