@@ -124,9 +124,12 @@ def register_person_tools(
             network: Optional connection-degree filter. Each element is one of
                 "F" (1st-degree), "S" (2nd-degree), "O" (3rd-degree and beyond).
                 Example: ["F"] to only return 1st-degree connections.
-            current_company: Optional current-employer filter. Accepts a company
-                name (e.g. "Weber Inc"). Numeric company URN IDs also work and
-                give the strictest match.
+            current_company: Optional current-employer filter. LinkedIn's
+                currentCompany facet only filters on the numeric company URN id
+                (e.g. "1115" for SAP); plain company names are accepted by the
+                URL but ignored by LinkedIn and return the unfiltered result
+                set. Look up a company's URN via get_company_profile -- it is
+                exposed under references["about"].
 
         Returns:
             Dict with url, sections (name -> raw text), and optional references.

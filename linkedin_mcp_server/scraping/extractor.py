@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import json
 import logging
 import re
 from typing import TYPE_CHECKING, Any, Literal
@@ -279,8 +280,7 @@ def _encode_list_facet(values: list[str]) -> str:
     ``["A","B"]``. This helper URL-encodes the rendered JSON so the final URL
     contains e.g. ``%5B%22F%22%5D`` for ``["F"]``.
     """
-    rendered = "[" + ",".join(f'"{v}"' for v in values) + "]"
-    return quote_plus(rendered)
+    return quote_plus(json.dumps(values, separators=(",", ":")))
 
 
 # Patterns that mark the start of LinkedIn page chrome (sidebar/footer).
@@ -2373,10 +2373,13 @@ class LinkedInExtractor:
                 ``"F"`` (1st-degree), ``"S"`` (2nd-degree), ``"O"`` (3rd-degree
                 and beyond). Example: ``["F"]`` to only return 1st-degree
                 connections. Invalid tokens raise ``ValueError``.
-            current_company: Optional current-employer filter. Accepts a company
-                name (e.g. ``"Weber Inc"``) and is passed through to LinkedIn's
-                ``currentCompany`` URL facet. Numeric company URN IDs work too
-                and give the strictest match.
+            current_company: Optional current-employer filter. LinkedIn's
+                ``currentCompany`` facet only filters on the numeric company
+                URN id (e.g. ``"1115"`` for SAP); plain company names are
+                accepted by the URL but ignored by LinkedIn and return the
+                unfiltered result set. Look up a company's URN via
+                ``get_company_profile`` -- it is exposed under
+                ``references["about"]``.
 
         Returns:
             {url, sections: {name: text}}
