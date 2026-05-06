@@ -673,7 +673,7 @@ class TestMessagingTools:
 
         assert result["sections"]["conversation"] == "Hello!\nHi there!"
         mock_extractor.get_conversation.assert_awaited_once_with(
-            linkedin_username="testuser", thread_id=None
+            linkedin_username="testuser", thread_id=None, index=0
         )
 
     async def test_search_conversations_success(self, mock_context):
@@ -692,7 +692,7 @@ class TestMessagingTools:
         result = await tool_fn("hello", mock_context, extractor=mock_extractor)
 
         assert result["sections"]["search_results"] == "Result 1\nResult 2"
-        mock_extractor.search_conversations.assert_awaited_once_with("hello")
+        mock_extractor.search_conversations.assert_awaited_once_with("hello", limit=20)
 
     async def test_send_message_success(self, mock_context):
         expected = {
@@ -780,7 +780,34 @@ class TestMessagingTools:
 
 class TestToolTimeouts:
     async def test_all_tools_have_global_timeout(self):
-        from linkedin_mcp_server.constants import TOOL_TIMEOUT_SECONDS
+        from linkedin_mcp_server.server import create_mcp_server
+
+        custom_timeout = 7.5
+        mcp = create_mcp_server(tool_timeout=custom_timeout)
+
+        tool_names = (
+            "get_person_profile",
+            "connect_with_person",
+            "get_sidebar_profiles",
+            "search_people",
+            "get_company_profile",
+            "get_company_posts",
+            "get_job_details",
+            "search_jobs",
+            "get_inbox",
+            "get_conversation",
+            "search_conversations",
+            "send_message",
+            "close_session",
+        )
+
+        for name in tool_names:
+            tool = await mcp.get_tool(name)
+            assert tool is not None
+            assert tool.timeout == custom_timeout
+
+    async def test_all_tools_have_default_timeout(self):
+        from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
         from linkedin_mcp_server.server import create_mcp_server
 
         mcp = create_mcp_server()
@@ -804,4 +831,4 @@ class TestToolTimeouts:
         for name in tool_names:
             tool = await mcp.get_tool(name)
             assert tool is not None
-            assert tool.timeout == TOOL_TIMEOUT_SECONDS
+            assert tool.timeout == DEFAULT_TOOL_TIMEOUT_SECONDS
