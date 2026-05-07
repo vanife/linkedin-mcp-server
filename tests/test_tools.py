@@ -36,6 +36,7 @@ def _make_mock_extractor(scrape_result: dict) -> MagicMock:
     mock.extract_page = AsyncMock(
         return_value=ExtractedSection(text="some text", references=[])
     )
+    mock.extract_feed = AsyncMock(return_value=ExtractedSection(text="", references=[]))
     return mock
 
 
@@ -806,6 +807,121 @@ class TestMessagingTools:
             )
 
 
+class TestFeedTools:
+    async def test_get_feed_success(self, mock_context):
+        mock_extractor = MagicMock()
+        mock_extractor.extract_feed = AsyncMock(
+            return_value=ExtractedSection(text="Post 1\nPost 2", references=[])
+        )
+
+        from linkedin_mcp_server.tools.feed import register_feed_tools
+
+        mcp = FastMCP("test")
+        register_feed_tools(mcp)
+
+        tool_fn = await get_tool_fn(mcp, "get_feed")
+        result = await tool_fn(mock_context, extractor=mock_extractor)
+        assert result["url"] == "https://www.linkedin.com/feed/"
+        assert "feed" in result["sections"]
+        assert result["sections"]["feed"] == "Post 1\nPost 2"
+        assert "posts" not in result
+
+    async def test_get_feed_surfaces_references(self, mock_context):
+        """References from the extractor flow through to the tool result."""
+        mock_extractor = MagicMock()
+        mock_extractor.extract_feed = AsyncMock(
+            return_value=ExtractedSection(
+                text="Some feed text",
+                references=[
+                    {
+                        "kind": "feed_post",
+                        "url": "/posts/alice_hello-ugcPost-1-xx",
+                        "context": "feed",
+                    },
+                    {
+                        "kind": "feed_post",
+                        "url": "/feed/update/urn:li:activity:1234567890/",
+                    },
+                ],
+            )
+        )
+
+        from linkedin_mcp_server.tools.feed import register_feed_tools
+
+        mcp = FastMCP("test")
+        register_feed_tools(mcp)
+
+        tool_fn = await get_tool_fn(mcp, "get_feed")
+        result = await tool_fn(mock_context, extractor=mock_extractor)
+        assert "posts" not in result
+        assert "feed" in result["references"]
+        urls = [r["url"] for r in result["references"]["feed"]]
+        assert "/posts/alice_hello-ugcPost-1-xx" in urls
+        assert "/feed/update/urn:li:activity:1234567890/" in urls
+
+    async def test_get_feed_rate_limited_surfaces_section_error(self, mock_context):
+        """Rate-limit sentinel becomes a typed section_errors entry."""
+        mock_extractor = MagicMock()
+        mock_extractor.extract_feed = AsyncMock(
+            return_value=ExtractedSection(text=_RATE_LIMITED_MSG, references=[])
+        )
+
+        from linkedin_mcp_server.tools.feed import register_feed_tools
+
+        mcp = FastMCP("test")
+        register_feed_tools(mcp)
+
+        tool_fn = await get_tool_fn(mcp, "get_feed")
+        result = await tool_fn(mock_context, extractor=mock_extractor)
+        assert "feed" not in result["sections"]
+        assert result["section_errors"]["feed"]["error_type"] == "rate_limit"
+        assert result["section_errors"]["feed"]["error_message"] == _RATE_LIMITED_MSG
+
+    async def test_get_feed_returns_section_errors(self, mock_context):
+        mock_extractor = MagicMock()
+        mock_extractor.extract_feed = AsyncMock(
+            return_value=ExtractedSection(
+                text="",
+                references=[],
+                error={"issue_template_path": "/tmp/feed-issue.md"},
+            )
+        )
+
+        from linkedin_mcp_server.tools.feed import register_feed_tools
+
+        mcp = FastMCP("test")
+        register_feed_tools(mcp)
+
+        tool_fn = await get_tool_fn(mcp, "get_feed")
+        result = await tool_fn(mock_context, extractor=mock_extractor)
+        assert result["sections"] == {}
+        assert "feed" in result["section_errors"]
+
+    async def test_get_feed_rejects_zero_num_posts(self, mock_context):
+        """Verify num_posts=0 is rejected by Field(ge=1) validation."""
+        from pydantic import ValidationError
+
+        from linkedin_mcp_server.tools.feed import register_feed_tools
+
+        mcp = FastMCP("test")
+        register_feed_tools(mcp)
+
+        with pytest.raises(ValidationError, match="num_posts"):
+            await mcp.call_tool("get_feed", {"num_posts": 0})
+
+    async def test_get_feed_rejects_excessive_num_posts(self, mock_context):
+        """Verify num_posts=51 is rejected by Field(le=50) validation."""
+        from pydantic import ValidationError
+
+        from linkedin_mcp_server.tools.feed import register_feed_tools
+
+        mcp = FastMCP("test")
+        register_feed_tools(mcp)
+
+        with pytest.raises(ValidationError, match="num_posts"):
+            await mcp.call_tool("get_feed", {"num_posts": 51})
+
+
 class TestToolTimeouts:
     async def test_all_tools_have_global_timeout(self):
         from linkedin_mcp_server.server import create_mcp_server
@@ -826,6 +942,7 @@ class TestToolTimeouts:
             "get_conversation",
             "search_conversations",
             "send_message",
+            "get_feed",
             "close_session",
         )
 
@@ -853,6 +970,7 @@ class TestToolTimeouts:
             "get_conversation",
             "search_conversations",
             "send_message",
+            "get_feed",
             "close_session",
         )
 

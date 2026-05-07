@@ -40,6 +40,7 @@ Through this LinkedIn MCP server, AI assistants like Claude can connect to your 
 | `search_jobs` | Search for jobs with keywords and location filters | working |
 | `search_people` | Search for people by keywords, location, connection degree (1st/2nd/3rd), and current company | working |
 | `get_job_details` | Get detailed information about a specific job posting | working |
+| `get_feed` | Get recent posts from the authenticated user's home feed | working |
 | `close_session` | Close browser session and clean up resources | working |
 
 <br/>
