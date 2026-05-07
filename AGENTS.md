@@ -31,7 +31,7 @@ Optional additional keys:
 - `section_errors: {section_name: {error_type, error_message, issue_template_path, runtime, ...}}`
 - `unknown_sections: [name, ...]`
 - `job_ids: [id, ...]` (search_jobs only)
-- `posts: [{text, url?}, ...]` (get_feed only) — per-post text blocks in feed order; `url` omitted for promoted/suggested items
+- `references["feed"]` (get_feed only) — `kind: "feed_post"` entries may carry either `/feed/update/<urn>/` (DOM-anchor-derived) or `/posts/<slug>` (SDUI-derived) URLs; both are valid LinkedIn permalinks. Cap is 50 entries, matching `get_feed`'s `num_posts` ceiling.
 
 ## Verifying Bug Reports
 
