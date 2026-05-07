@@ -2227,6 +2227,91 @@ class TestSearchJobs:
         assert result["sections"] == {}
         assert "references" not in result
 
+    async def test_search_people_network_filter_first_degree(self, mock_page):
+        extractor = LinkedInExtractor(mock_page)
+        with patch.object(
+            extractor,
+            "extract_page",
+            new_callable=AsyncMock,
+            return_value=extracted("Jane Doe"),
+        ):
+            result = await extractor.search_people("engineer", network=["F"])
+
+        assert "network=%5B%22F%22%5D" in result["url"]
+
+    async def test_search_people_network_filter_multi_degree(self, mock_page):
+        extractor = LinkedInExtractor(mock_page)
+        with patch.object(
+            extractor,
+            "extract_page",
+            new_callable=AsyncMock,
+            return_value=extracted("Jane Doe"),
+        ):
+            result = await extractor.search_people("engineer", network=["F", "S"])
+
+        assert "network=%5B%22F%22%2C%22S%22%5D" in result["url"]
+
+    async def test_search_people_current_company_filter(self, mock_page):
+        extractor = LinkedInExtractor(mock_page)
+        with patch.object(
+            extractor,
+            "extract_page",
+            new_callable=AsyncMock,
+            return_value=extracted("Jane Doe"),
+        ):
+            result = await extractor.search_people("engineer", current_company="1115")
+
+        assert "currentCompany=%5B%221115%22%5D" in result["url"]
+
+    async def test_search_people_invalid_network_token_raises(self, mock_page):
+        extractor = LinkedInExtractor(mock_page)
+        with pytest.raises(ValueError, match="Invalid network token"):
+            await extractor.search_people("engineer", network=["X"])
+
+    async def test_search_people_rejects_plain_company_name(self, mock_page):
+        extractor = LinkedInExtractor(mock_page)
+        with pytest.raises(ValueError, match="must be a numeric"):
+            await extractor.search_people("engineer", current_company="SAP")
+
+    async def test_search_people_rejects_unicode_digit_company(self, mock_page):
+        """LinkedIn URN ids are ASCII decimal; reject Unicode digits even
+        though ``str.isdigit()`` would accept them."""
+        extractor = LinkedInExtractor(mock_page)
+        with pytest.raises(ValueError, match="must be a numeric"):
+            await extractor.search_people("engineer", current_company="١١١٥")
+
+    async def test_search_people_empty_current_company_is_noop(self, mock_page):
+        extractor = LinkedInExtractor(mock_page)
+        with patch.object(
+            extractor,
+            "extract_page",
+            new_callable=AsyncMock,
+            return_value=extracted("Jane Doe"),
+        ):
+            result = await extractor.search_people("engineer", current_company="")
+
+        assert "currentCompany" not in result["url"]
+
+    async def test_search_people_combines_all_filters(self, mock_page):
+        extractor = LinkedInExtractor(mock_page)
+        with patch.object(
+            extractor,
+            "extract_page",
+            new_callable=AsyncMock,
+            return_value=extracted("Jane Doe"),
+        ):
+            result = await extractor.search_people(
+                "engineer",
+                location="Seattle",
+                network=["F"],
+                current_company="1115",
+            )
+
+        assert "keywords=engineer" in result["url"]
+        assert "location=Seattle" in result["url"]
+        assert "network=%5B%22F%22%5D" in result["url"]
+        assert "currentCompany=%5B%221115%22%5D" in result["url"]
+
 
 class TestStripLinkedInNoise:
     def test_strips_footer(self):

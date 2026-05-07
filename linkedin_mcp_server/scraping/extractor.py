@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import json
 import logging
 import re
 from typing import TYPE_CHECKING, Any, Literal
@@ -87,6 +88,10 @@ _JOB_TYPE_MAP = {
 _WORK_TYPE_MAP = {"on_site": "1", "remote": "2", "hybrid": "3"}
 
 _SORT_BY_MAP = {"date": "DD", "relevance": "R"}
+
+# Valid tokens for the people-search ``network`` facet.
+# LinkedIn accepts "F" (1st-degree), "S" (2nd-degree), "O" (3rd-degree and beyond).
+_NETWORK_TOKENS = ("F", "S", "O")
 
 _DIALOG_SELECTOR = 'dialog[open], [role="dialog"]'
 _DIALOG_TEXTAREA_SELECTOR = '[role="dialog"] textarea, dialog textarea'
@@ -268,6 +273,16 @@ def _normalize_csv(value: str, mapping: dict[str, str]) -> str:
     return ",".join(mapping.get(p, p) for p in parts)
 
 
+def _encode_list_facet(values: list[str]) -> str:
+    """Encode a list of string values for a LinkedIn people-search list facet.
+
+    LinkedIn's people-search URL uses JSON-list encoded facets of the form
+    ``["A","B"]``. This helper URL-encodes the rendered JSON so the final URL
+    contains e.g. ``%5B%22F%22%5D`` for ``["F"]``.
+    """
+    return quote_plus(json.dumps(values, separators=(",", ":")))
+
+
 # Patterns that mark the start of LinkedIn page chrome (sidebar/footer).
 # Everything from the earliest match onwards is stripped.
 _NOISE_MARKERS: list[re.Pattern[str]] = [
@@ -302,6 +317,16 @@ class ExtractedSection:
     text: str
     references: list[Reference]
     error: dict[str, Any] | None = None
+
+
+class FilterValidationError(ValueError):
+    """Invalid ``search_people`` filter input (network token / URN shape).
+
+    Subclassing ``ValueError`` keeps backward-compatible behaviour for
+    direct extractor callers (``pytest.raises(ValueError)`` matches), while
+    letting the MCP tool wrapper catch this case precisely and surface the
+    actionable message past ``mask_error_details``.
+    """
 
 
 def strip_linkedin_noise(text: str) -> str:
@@ -2346,15 +2371,52 @@ class LinkedInExtractor:
         self,
         keywords: str,
         location: str | None = None,
+        network: list[str] | None = None,
+        current_company: str | None = None,
     ) -> dict[str, Any]:
         """Search for people and extract the results page.
+
+        Args:
+            keywords: Free-text query ("software engineer", "recruiter at Google").
+            location: Optional location filter ("New York", "Remote").
+            network: Optional connection-degree filter. Each element is one of
+                ``"F"`` (1st-degree), ``"S"`` (2nd-degree), ``"O"`` (3rd-degree
+                and beyond). Example: ``["F"]`` to only return 1st-degree
+                connections. Invalid tokens raise ``ValueError``.
+            current_company: Optional current-employer filter. LinkedIn's
+                ``currentCompany`` facet only filters on the numeric company
+                URN id (e.g. ``"1115"`` for SAP); plain company names are
+                accepted by the URL but ignored by LinkedIn and return the
+                unfiltered result set. Look up a company's URN via
+                ``get_company_profile`` -- it is exposed under
+                ``references["about"]``.
 
         Returns:
             {url, sections: {name: text}}
         """
+        if network is not None:
+            invalid = [t for t in network if t not in _NETWORK_TOKENS]
+            if invalid:
+                raise FilterValidationError(
+                    "Invalid network token(s) "
+                    f"{invalid!r}; expected any of {list(_NETWORK_TOKENS)!r}"
+                )
+
+        if current_company and not re.fullmatch(r"[0-9]+", current_company):
+            raise FilterValidationError(
+                f"current_company must be a numeric LinkedIn company URN id "
+                f"(e.g. '1115' for SAP); got {current_company!r}. Plain-text "
+                f"company names are silently ignored by LinkedIn. Look up the "
+                f'URN via get_company_profile -> references["about"].'
+            )
+
         params = f"keywords={quote_plus(keywords)}"
         if location:
             params += f"&location={quote_plus(location)}"
+        if network:
+            params += f"&network={_encode_list_facet(network)}"
+        if current_company:
+            params += f"&currentCompany={_encode_list_facet([current_company])}"
 
         url = f"https://www.linkedin.com/search/results/people/?{params}"
         extracted = await self.extract_page(url, section_name="search_results")
