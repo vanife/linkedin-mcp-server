@@ -17,7 +17,7 @@ from linkedin_mcp_server.scraping.extractor import (
     ExtractedSection,
     LinkedInExtractor,
     _RATE_LIMITED_MSG,
-    _build_feed_posts,
+    _build_feed_references,
     _truncate_linkedin_noise,
     strip_linkedin_noise,
 )
@@ -4250,63 +4250,66 @@ class TestSendMessageComposerInteraction:
         mock_keyboard.press.assert_awaited_once_with("Enter")
 
 
-class TestBuildFeedPosts:
-    def test_matches_urls_to_posts_by_content_fingerprint(self):
-        # URL order reversed vs DOM order — slug fingerprint matching should
-        # still pair each URL with the correct post.
-        text = (
-            "Feed post\n\nAlice\n\nMe and Charles, 7 years ago on graduation day\n\n"
-            "Feed post\n\nBob\n\nBuilding a company is almost inhuman and hard"
-        )
-        url_a = "https://www.linkedin.com/posts/alice_me-and-charles-7-years-ago-on-graduation-share-1-xx"
-        url_b = "https://www.linkedin.com/posts/building-a-company-is-almost-inhuman-and-ugcPost-2-yy"
-        posts = _build_feed_posts(text, [url_b, url_a])
-        assert posts == [
+class TestBuildFeedReferences:
+    """Tests for _build_feed_references SDUI-capture / DOM-anchor merging."""
+
+    def test_sdui_urls_become_relative_feed_post_references(self):
+        captured = [
+            "https://www.linkedin.com/posts/alice_some-slug-ugcPost-1-xx",
+            "https://www.linkedin.com/posts/bob_other-post-share-2-yy",
+        ]
+        refs = _build_feed_references([], captured)
+        assert refs == [
             {
-                "text": "Alice\n\nMe and Charles, 7 years ago on graduation day",
-                "url": url_a,
+                "kind": "feed_post",
+                "url": "/posts/alice_some-slug-ugcPost-1-xx",
+                "context": "feed",
             },
             {
-                "text": "Bob\n\nBuilding a company is almost inhuman and hard",
-                "url": url_b,
+                "kind": "feed_post",
+                "url": "/posts/bob_other-post-share-2-yy",
+                "context": "feed",
             },
         ]
 
-    def test_unmatched_post_gets_no_url(self):
-        text = "Feed post\n\nSuggested promo with no permalink"
-        posts = _build_feed_posts(text, [])
-        assert posts == [{"text": "Suggested promo with no permalink"}]
+    def test_duplicate_sdui_urls_are_deduped(self):
+        captured = [
+            "https://www.linkedin.com/posts/alice_x-ugcPost-1-xx",
+            "https://www.linkedin.com/posts/alice_x-ugcPost-1-xx",
+        ]
+        refs = _build_feed_references([], captured)
+        assert len(refs) == 1
+        assert refs[0]["url"] == "/posts/alice_x-ugcPost-1-xx"
 
-    def test_drops_preamble_before_first_marker(self):
-        text = "site chrome\nmore chrome\nFeed post\n\nreal post body here"
-        posts = _build_feed_posts(text, [])
-        assert posts == [{"text": "real post body here"}]
+    def test_dom_anchor_feed_update_passes_through(self):
+        # DOM anchors that classify_link recognises as feed_post survive
+        # the merge alongside SDUI captures.
+        raw_anchors = [
+            {
+                "href": "https://www.linkedin.com/feed/update/urn:li:activity:1234567890/",
+                "text": "View post",
+            }
+        ]
+        refs = _build_feed_references(raw_anchors, [])
+        assert any(
+            r["url"] == "/feed/update/urn:li:activity:1234567890/"
+            and r["kind"] == "feed_post"
+            for r in refs
+        )
 
-    def test_empty_text_yields_no_posts(self):
-        assert _build_feed_posts("", ["u1"]) == []
+    def test_non_posts_paths_in_sdui_capture_are_skipped(self):
+        # Defensive: only /posts/<slug> shapes count for SDUI append.
+        captured = [
+            "https://www.linkedin.com/in/someuser/",
+            "https://www.linkedin.com/posts/alice_x-ugcPost-1-xx",
+        ]
+        refs = _build_feed_references([], captured)
+        assert [r["url"] for r in refs] == ["/posts/alice_x-ugcPost-1-xx"]
 
-    def test_urls_without_matching_post_are_dropped(self):
-        text = "Feed post\n\nHello world from the only post"
-        url = "https://www.linkedin.com/posts/alice_hello-world-from-the-only-post-ugcPost-1-xx"
-        extra = "https://www.linkedin.com/posts/unrelated-slug-that-matches-nothing-ugcPost-2-yy"
-        posts = _build_feed_posts(text, [extra, url])
-        assert posts == [{"text": "Hello world from the only post", "url": url}]
-
-    def test_punctuation_differences_dont_block_match(self):
-        text = "Feed post\n\nLet's go, Paul! 15M from Benchmark."
-        url = "https://www.linkedin.com/posts/guillaumerx21_lets-go-paul-15m-from-benchmark-share-1-xx"
-        posts = _build_feed_posts(text, [url])
-        assert posts == [{"text": "Let's go, Paul! 15M from Benchmark.", "url": url}]
-
-    def test_malformed_slug_url_is_ignored(self):
-        text = "Feed post\n\nSome post"
-        posts = _build_feed_posts(text, ["https://example.com/not-a-slug-url"])
-        assert posts == [{"text": "Some post"}]
-
-    def test_unicode_bold_post_body_matches_plain_slug(self):
-        # LinkedIn posts styled with mathematical-bold Unicode (U+1D400 block)
-        # should still match their plain-text slug after NFKC normalization.
-        text = "Feed post\n\n𝐈 𝐠𝐨𝐭 𝐟𝐢𝐫𝐞𝐝 𝐟𝐫𝐨𝐦 𝐦𝐲 𝐣𝐨𝐛 because I was bad"
-        url = "https://www.linkedin.com/posts/louis_i-got-fired-from-my-job-because-i-was-bad-share-1-xx"
-        posts = _build_feed_posts(text, [url])
-        assert posts == [{"text": text.split("\n\n", 1)[1], "url": url}]
+    def test_cap_matches_num_posts_ceiling(self):
+        captured = [
+            f"https://www.linkedin.com/posts/p{i}-ugcPost-{i}-xx" for i in range(60)
+        ]
+        refs = _build_feed_references([], captured)
+        # Cap is 50, mirroring _REFERENCE_CAPS["feed"] / num_posts <= 50.
+        assert len(refs) == 50

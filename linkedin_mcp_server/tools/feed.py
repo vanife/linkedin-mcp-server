@@ -7,11 +7,12 @@ of posts are visible in the DOM.
 """
 
 import logging
-from typing import Any
+from typing import Annotated, Any
 
 from fastmcp import Context, FastMCP
+from pydantic import Field
 
-from linkedin_mcp_server.constants import TOOL_TIMEOUT_SECONDS
+from linkedin_mcp_server.config.schema import DEFAULT_TOOL_TIMEOUT_SECONDS
 from linkedin_mcp_server.core.exceptions import AuthenticationError
 from linkedin_mcp_server.dependencies import get_ready_extractor, handle_auth_error
 from linkedin_mcp_server.error_handler import raise_tool_error
@@ -21,11 +22,13 @@ from linkedin_mcp_server.scraping.link_metadata import Reference
 logger = logging.getLogger(__name__)
 
 
-def register_feed_tools(mcp: FastMCP) -> None:
+def register_feed_tools(
+    mcp: FastMCP, *, tool_timeout: float = DEFAULT_TOOL_TIMEOUT_SECONDS
+) -> None:
     """Register feed-related tools with the MCP server."""
 
     @mcp.tool(
-        timeout=TOOL_TIMEOUT_SECONDS,
+        timeout=tool_timeout,
         title="Get Feed",
         annotations={"readOnlyHint": True, "openWorldHint": True},
         tags={"feed", "scraping"},
@@ -33,7 +36,7 @@ def register_feed_tools(mcp: FastMCP) -> None:
     )
     async def get_feed(
         ctx: Context,
-        num_posts: int = 10,
+        num_posts: Annotated[int, Field(ge=1, le=50)] = 10,
         extractor: Any | None = None,
     ) -> dict[str, Any]:
         """
@@ -47,15 +50,22 @@ def register_feed_tools(mcp: FastMCP) -> None:
 
         Returns:
             Dict with url, sections (name -> raw text), and optional keys:
-            - posts: list of {url, text} per post in feed order. Some posts
-              (promoted/suggested) have no url.
-            - references, section_errors.
+            - references["feed"]: list of {kind: "feed_post", url, ...}
+              entries. URLs are relative paths and may carry either
+              ``/feed/update/<urn>/`` (DOM-anchor-derived) or
+              ``/posts/<slug>`` (SDUI-derived) shape — both are valid
+              LinkedIn permalinks.
+            - section_errors: present when the feed is rate-limited or
+              extraction fails.
+
+            Truncated posts are not auto-expanded; full text for any post
+            is reachable via its permalink in references["feed"]. The LLM
+            should parse sections["feed"] for post bodies.
         """
         try:
             extractor = extractor or await get_ready_extractor(
                 ctx, tool_name="get_feed"
             )
-            num_posts = max(1, min(num_posts, 50))
             logger.info("Scraping feed (num_posts=%d)", num_posts)
 
             await ctx.report_progress(
@@ -83,8 +93,6 @@ def register_feed_tools(mcp: FastMCP) -> None:
             await ctx.report_progress(progress=100, total=100, message="Complete")
 
             result: dict[str, Any] = {"url": url, "sections": sections}
-            if extracted.posts:
-                result["posts"] = extracted.posts
             if references:
                 result["references"] = references
             if section_errors:

@@ -826,18 +826,22 @@ class TestFeedTools:
         assert result["sections"]["feed"] == "Post 1\nPost 2"
         assert "posts" not in result
 
-    async def test_get_feed_includes_posts(self, mock_context):
+    async def test_get_feed_surfaces_references(self, mock_context):
+        """References from the extractor flow through to the tool result."""
         mock_extractor = MagicMock()
         mock_extractor.extract_feed = AsyncMock(
             return_value=ExtractedSection(
-                text="Feed post\n\nhello\n\nFeed post\n\nworld",
-                references=[],
-                posts=[
+                text="Some feed text",
+                references=[
                     {
-                        "text": "hello",
-                        "url": "https://www.linkedin.com/posts/a_hello-ugcPost-1-xx",
+                        "kind": "feed_post",
+                        "url": "/posts/alice_hello-ugcPost-1-xx",
+                        "context": "feed",
                     },
-                    {"text": "world"},
+                    {
+                        "kind": "feed_post",
+                        "url": "/feed/update/urn:li:activity:1234567890/",
+                    },
                 ],
             )
         )
@@ -849,15 +853,14 @@ class TestFeedTools:
 
         tool_fn = await get_tool_fn(mcp, "get_feed")
         result = await tool_fn(mock_context, extractor=mock_extractor)
-        assert result["posts"] == [
-            {
-                "text": "hello",
-                "url": "https://www.linkedin.com/posts/a_hello-ugcPost-1-xx",
-            },
-            {"text": "world"},
-        ]
+        assert "posts" not in result
+        assert "feed" in result["references"]
+        urls = [r["url"] for r in result["references"]["feed"]]
+        assert "/posts/alice_hello-ugcPost-1-xx" in urls
+        assert "/feed/update/urn:li:activity:1234567890/" in urls
 
-    async def test_get_feed_omits_rate_limited_sentinel(self, mock_context):
+    async def test_get_feed_rate_limited_surfaces_section_error(self, mock_context):
+        """Rate-limit sentinel becomes a typed section_errors entry."""
         mock_extractor = MagicMock()
         mock_extractor.extract_feed = AsyncMock(
             return_value=ExtractedSection(text=_RATE_LIMITED_MSG, references=[])
@@ -870,7 +873,9 @@ class TestFeedTools:
 
         tool_fn = await get_tool_fn(mcp, "get_feed")
         result = await tool_fn(mock_context, extractor=mock_extractor)
-        assert result["sections"] == {}
+        assert "feed" not in result["sections"]
+        assert result["section_errors"]["feed"]["error_type"] == "rate_limit"
+        assert result["section_errors"]["feed"]["error_message"] == _RATE_LIMITED_MSG
 
     async def test_get_feed_returns_section_errors(self, mock_context):
         mock_extractor = MagicMock()
@@ -892,24 +897,29 @@ class TestFeedTools:
         assert result["sections"] == {}
         assert "feed" in result["section_errors"]
 
-    async def test_get_feed_clamps_num_posts(self, mock_context):
-        mock_extractor = MagicMock()
-        mock_extractor.extract_feed = AsyncMock(
-            return_value=ExtractedSection(text="Feed content", references=[])
-        )
+    async def test_get_feed_rejects_zero_num_posts(self, mock_context):
+        """Verify num_posts=0 is rejected by Field(ge=1) validation."""
+        from pydantic import ValidationError
 
         from linkedin_mcp_server.tools.feed import register_feed_tools
 
         mcp = FastMCP("test")
         register_feed_tools(mcp)
 
-        tool_fn = await get_tool_fn(mcp, "get_feed")
-        await tool_fn(mock_context, num_posts=100, extractor=mock_extractor)
-        mock_extractor.extract_feed.assert_called_once_with(num_posts=50)
+        with pytest.raises(ValidationError, match="num_posts"):
+            await mcp.call_tool("get_feed", {"num_posts": 0})
 
-        mock_extractor.extract_feed.reset_mock()
-        await tool_fn(mock_context, num_posts=0, extractor=mock_extractor)
-        mock_extractor.extract_feed.assert_called_once_with(num_posts=1)
+    async def test_get_feed_rejects_excessive_num_posts(self, mock_context):
+        """Verify num_posts=51 is rejected by Field(le=50) validation."""
+        from pydantic import ValidationError
+
+        from linkedin_mcp_server.tools.feed import register_feed_tools
+
+        mcp = FastMCP("test")
+        register_feed_tools(mcp)
+
+        with pytest.raises(ValidationError, match="num_posts"):
+            await mcp.call_tool("get_feed", {"num_posts": 51})
 
 
 class TestToolTimeouts:
@@ -932,6 +942,7 @@ class TestToolTimeouts:
             "get_conversation",
             "search_conversations",
             "send_message",
+            "get_feed",
             "close_session",
         )
 

@@ -7,7 +7,6 @@ from dataclasses import dataclass
 import json
 import logging
 import re
-import unicodedata
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 
@@ -318,7 +317,6 @@ class ExtractedSection:
     text: str
     references: list[Reference]
     error: dict[str, Any] | None = None
-    posts: list[dict[str, Any]] | None = None
 
 
 _FEED_RSC_MARKER = "sduiid=com.linkedin.sdui.pagers.feed.mainFeed"
@@ -330,25 +328,10 @@ _POST_SLUG_URL_RE = re.compile(
     r"linkedin\.com(?:\\u002[fF]|/)posts(?:\\u002[fF]|/)"
     r"(?P<slug>[A-Za-z0-9_-]+?-(?:ugcPost|activity|share)-\d+-[A-Za-z0-9_-]+)"
 )
-_FEED_POST_SPLIT_RE = re.compile(r"(?:^|\n)Feed post\s*\n+")
 _FEED_DOCUMENT_URLS = {
     "https://www.linkedin.com/feed",
     "https://www.linkedin.com/feed/",
 }
-_POST_SLUG_PATH_RE = re.compile(
-    r"/posts/(?P<prefix>.+?)-(?:ugcPost|activity|share)-\d+-[A-Za-z0-9_-]+/?$"
-)
-_NON_ALNUM_RE = re.compile(r"[^a-z0-9]")
-# Minimum normalized length of a slug fingerprint before we'll try to match it
-# against a post block — guards against false positives from very short slugs.
-_MIN_FINGERPRINT_LEN = 12
-
-
-def _normalize_for_match(text: str) -> str:
-    # NFKC folds mathematical-bold / full-width / superscript characters to
-    # their ASCII equivalents, so posts styled with Unicode typography still
-    # substring-match their plain-text slugs.
-    return _NON_ALNUM_RE.sub("", unicodedata.normalize("NFKC", text).lower())
 
 
 def _is_feed_payload_response(url: str) -> bool:
@@ -358,65 +341,72 @@ def _is_feed_payload_response(url: str) -> bool:
     return url.split("?", 1)[0] in _FEED_DOCUMENT_URLS
 
 
-def _fingerprint_from_slug_url(slug_url: str) -> str | None:
-    """Derive a normalized content fingerprint from a post slug URL.
-
-    LinkedIn encodes the first several words of the post body into the slug:
-    ``/posts/<author>_<title-words>-<type>-<id>-<trk>`` (or just
-    ``/posts/<title-words>-<type>-<id>-<trk>`` for org posts). We extract the
-    title portion and strip non-alphanumerics so it substring-matches the
-    post's innerText regardless of punctuation/whitespace differences.
-    """
-    path = slug_url.split("?", 1)[0].split("#", 1)[0]
-    match = _POST_SLUG_PATH_RE.search(path)
-    if not match:
-        return None
-    prefix = match.group("prefix")
-    _, sep, title = prefix.partition("_")
-    if not sep:
-        title = prefix
-    normalized = _normalize_for_match(title)
-    return normalized if len(normalized) >= _MIN_FINGERPRINT_LEN else None
-
-
-def _build_feed_posts(
-    cleaned_text: str,
+def _build_feed_references(
+    raw_references: list[Any],
     captured_urls: list[str],
-) -> list[dict[str, Any]]:
-    """Split feed innerText into per-post blocks and attach captured permalinks.
+) -> list[Reference]:
+    """Compose feed references from DOM anchors + SDUI captures.
 
-    Matches each URL to a post by content fingerprint (first words of the
-    post body, encoded into the slug URL). Ordering between the captured-URL
-    list and the rendered DOM is not stable — posts from the initial HTML
-    document and subsequent pagination fetches interleave — so we key on
-    content instead. Promoted/suggested posts have no ``postSlugUrl`` and
-    simply receive no ``url`` field.
+    DOM anchors give whatever ``classify_link`` recognises (typically
+    ``feed_post`` for ``/feed/update/<urn>/`` shapes). SDUI captures
+    surface every ``/posts/<slug>`` permalink the page emitted, even
+    when no DOM anchor renders for it. We fold both into the same
+    ``feed_post`` kind, deduping on the exact URL string.
+
+    Note on URL shapes: ``/feed/update/<urn>/`` and ``/posts/<slug>``
+    pointing at the same underlying post will *not* collapse here —
+    ``dedupe_references`` matches exact strings. Both shapes are valid
+    LinkedIn permalinks, so consumers should treat ``feed_post`` as
+    polymorphic on URL form. URN-based equivalence is left to the
+    consumer.
     """
-    blocks = [
-        block.strip()
-        for block in _FEED_POST_SPLIT_RE.split(cleaned_text)
-        if block.strip()
-    ]
-    if blocks and not cleaned_text.lstrip().startswith("Feed post"):
-        blocks = blocks[1:]
+    refs = build_references(raw_references, "feed")
+    existing = {r["url"] for r in refs}
+    for sdui_url in captured_urls:
+        # AGENTS.md mandates relative paths for LinkedIn references.
+        # The SDUI capture carries fully-qualified URLs like
+        # https://www.linkedin.com/posts/<slug>; strip the host so the
+        # relative-path convention holds. ``classify_link`` does not
+        # currently route ``/posts/<slug>`` paths to any kind, so we
+        # bypass it for this fallback append.
+        parsed = urlparse(sdui_url)
+        if not parsed.path.startswith("/posts/"):
+            continue
+        relative = parsed.path
+        if relative in existing:
+            continue
+        refs.append({"kind": "feed_post", "url": relative, "context": "feed"})
+        existing.add(relative)
+    # Cap kept in sync with _REFERENCE_CAPS["feed"] in link_metadata.py;
+    # changing one without the other will drop or duplicate entries
+    # silently. Matches get_feed's num_posts ceiling (Field(ge=1, le=50)).
+    return dedupe_references(refs, cap=50)
 
-    url_pool: list[tuple[str, str]] = []
-    for url in captured_urls:
-        fingerprint = _fingerprint_from_slug_url(url)
-        if fingerprint:
-            url_pool.append((fingerprint, url))
 
-    posts: list[dict[str, Any]] = []
-    for block in blocks:
-        entry: dict[str, Any] = {"text": block}
-        normalized_block = _normalize_for_match(block)
-        for i, (fingerprint, url) in enumerate(url_pool):
-            if fingerprint in normalized_block:
-                entry["url"] = url
-                url_pool.pop(i)
-                break
-        posts.append(entry)
-    return posts
+async def _drain_listener_tasks(pending: list[asyncio.Task[None]]) -> None:
+    """Bounded teardown for fire-and-forget response listener tasks.
+
+    The feed scroll loop appends a read task per matching response;
+    those tasks must finish (or be cancelled) before we leave the
+    extractor or the event loop's "Task exception was never retrieved"
+    warnings will surface unrelated errors. The caps below let a stuck
+    ``resp.body()`` call burn at most three seconds of teardown budget.
+    """
+    if not pending:
+        return
+    _done, leftover = await asyncio.wait(pending, timeout=2.0)
+    for task in leftover:
+        task.cancel()
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*pending, return_exceptions=True),
+            timeout=1.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "SDUI feed listener tasks did not drain after cancel; leaking %d task(s)",
+            sum(1 for t in pending if not t.done()),
+        )
 
 
 class FilterValidationError(ValueError):
@@ -922,11 +912,15 @@ class LinkedInExtractor:
         """Single attempt: navigate, scroll until post count, extract."""
         url = "https://www.linkedin.com/feed/"
 
-        # Post permalinks aren't rendered in the feed DOM anymore — they only
-        # live in the SDUI pagination response (field: "postSlugUrl"). Listen
-        # for those responses during the whole scroll loop.
+        # Post permalinks live in the SDUI pagination response (field:
+        # "postSlugUrl"). The initial /feed/ HTML embeds the same data in
+        # an RSC flight payload. Listen for both during the whole scroll
+        # loop. ``seen_urls`` doubles as the locale-independent scroll
+        # progress signal, replacing the previous "Feed post" innerText
+        # marker that broke on non-English UIs.
         captured_urls: list[str] = []
         seen_urls: set[str] = set()
+        pending_reads: list[asyncio.Task[None]] = []
 
         def _handle_response(resp: Any) -> None:
             if not _is_feed_payload_response(resp.url):
@@ -946,22 +940,26 @@ class LinkedInExtractor:
                         seen_urls.add(post_url)
                         captured_urls.append(post_url)
 
-            asyncio.create_task(_read())
+            pending_reads.append(asyncio.create_task(_read()))
 
         self._page.on("response", _handle_response)
         try:
-            return await self._extract_feed_body(url, num_posts, captured_urls)
+            return await self._extract_feed_body(
+                url, num_posts, captured_urls, pending_reads
+            )
         finally:
             try:
                 self._page.remove_listener("response", _handle_response)
             except Exception:
                 pass
+            await _drain_listener_tasks(pending_reads)
 
     async def _extract_feed_body(
         self,
         url: str,
         num_posts: int,
         captured_urls: list[str],
+        pending_reads: list[asyncio.Task[None]],
     ) -> ExtractedSection:
         await self._navigate_to_page(url)
         await detect_rate_limit(self._page)
@@ -987,11 +985,11 @@ class LinkedInExtractor:
 
         # The feed has its own scroll container — window.scrollTo is a no-op.
         # mouse.wheel over the viewport center triggers the real scroll.
-        _POST_MARKER = "Feed post"
         _MAX_SCROLLS = 12
         _MAX_STALE = 3
         _BATCH_WAIT = 6.0
         _WHEEL_DELTA = 2000
+        _IN_LOOP_DRAIN_TIMEOUT = 1.0
         stale_count = 0
 
         viewport = self._page.viewport_size or {"width": 1280, "height": 720}
@@ -999,15 +997,8 @@ class LinkedInExtractor:
         await self._page.mouse.move(cx, cy)
 
         for i in range(_MAX_SCROLLS):
-            count = await self._page.evaluate(
-                """(marker) => {
-                    const main = document.querySelector('main');
-                    if (!main) return 0;
-                    return main.innerText.split(marker).length - 1;
-                }""",
-                _POST_MARKER,
-            )
-            logger.debug("Feed scroll %d: %d posts loaded", i, count)
+            count = len(captured_urls)
+            logger.debug("Feed scroll %d: %d permalinks captured", i, count)
             if count >= num_posts:
                 break
 
@@ -1016,14 +1007,23 @@ class LinkedInExtractor:
             new_count = count
             for _ in range(int(_BATCH_WAIT)):
                 await asyncio.sleep(1.0)
-                new_count = await self._page.evaluate(
-                    """(marker) => {
-                        const main = document.querySelector('main');
-                        if (!main) return 0;
-                        return main.innerText.split(marker).length - 1;
-                    }""",
-                    _POST_MARKER,
-                )
+                # Drain in-flight response reads so captured_urls reflects
+                # everything Playwright already delivered. Without this,
+                # the count comparison races: the wheel fires a network
+                # response, the listener creates a read task, and the loop
+                # sleeps and re-checks before _read() finishes appending —
+                # producing false-stale verdicts.
+                if pending_reads:
+                    done, _still = await asyncio.wait(
+                        pending_reads, timeout=_IN_LOOP_DRAIN_TIMEOUT
+                    )
+                    if done:
+                        # Surface unexpected exceptions; _read() catches
+                        # the expected playwright errors but a parser bug
+                        # should not silently disappear into the loop.
+                        await asyncio.gather(*done, return_exceptions=True)
+                    pending_reads[:] = [t for t in pending_reads if not t.done()]
+                new_count = len(captured_urls)
                 if new_count > count:
                     break
 
@@ -1032,7 +1032,7 @@ class LinkedInExtractor:
             else:
                 stale_count += 1
                 logger.debug(
-                    "Feed stale scroll %d/%d (still at %d posts)",
+                    "Feed stale scroll %d/%d (still at %d permalinks)",
                     stale_count,
                     _MAX_STALE,
                     new_count,
@@ -1040,21 +1040,6 @@ class LinkedInExtractor:
                 if stale_count >= _MAX_STALE:
                     logger.debug("Feed stopped producing new posts")
                     break
-
-        # Expand "… more" buttons via JS click (Playwright clicks time out on obscured buttons).
-        expanded = await self._page.evaluate(
-            """() => {
-                const main = document.querySelector('main');
-                if (!main) return 0;
-                const btns = Array.from(main.querySelectorAll('button'))
-                    .filter(b => /^…?\\s*(see )?more$/i.test(b.innerText.trim()));
-                btns.forEach(b => b.click());
-                return btns.length;
-            }"""
-        )
-        logger.debug("Expanded %d truncated posts", expanded)
-        if expanded:
-            await asyncio.sleep(0.5)
 
         # Give any in-flight response reads a beat to finish recording URLs.
         await asyncio.sleep(0.2)
@@ -1071,11 +1056,9 @@ class LinkedInExtractor:
             )
             return ExtractedSection(text=_RATE_LIMITED_MSG, references=[])
         cleaned = _filter_linkedin_noise_lines(truncated)
-        posts = _build_feed_posts(cleaned, captured_urls)
         return ExtractedSection(
             text=cleaned,
-            references=build_references(raw_result["references"], "feed"),
-            posts=posts,
+            references=_build_feed_references(raw_result["references"], captured_urls),
         )
 
     async def extract_page(
