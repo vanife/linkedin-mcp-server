@@ -1,9 +1,11 @@
 """
 LinkedIn feed scraping tool.
 
-Fetches posts from the authenticated user's LinkedIn home feed
-using innerText extraction. Scrolls until the requested number
-of posts are visible in the DOM.
+Fetches posts from the authenticated user's LinkedIn home feed using
+innerText extraction. Scrolls until the requested number of post
+permalinks have been observed in SDUI pagination responses — a
+locale-independent progress signal, since the feed DOM exposes no
+stable per-post container selector.
 """
 
 import logging

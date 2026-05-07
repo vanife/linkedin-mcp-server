@@ -4313,3 +4313,42 @@ class TestBuildFeedReferences:
         refs = _build_feed_references([], captured)
         # Cap is 50, mirroring _REFERENCE_CAPS["feed"] / num_posts <= 50.
         assert len(refs) == 50
+
+    def test_non_feed_post_dom_anchors_are_filtered(self):
+        # Sidebar profile / company / external anchors must not crowd
+        # out SDUI permalinks — references["feed"] is feed_post-only.
+        raw_anchors = [
+            {
+                "href": "https://www.linkedin.com/in/sidebar-user/",
+                "text": "Sidebar User",
+            },
+            {
+                "href": "https://www.linkedin.com/company/some-corp/",
+                "text": "Some Corp",
+            },
+            {
+                "href": "https://example.com/external/",
+                "text": "External Link",
+            },
+        ]
+        refs = _build_feed_references(raw_anchors, [])
+        assert refs == []
+
+    def test_feed_post_dom_anchors_coexist_with_sdui_captures(self):
+        # The two sources fold into the same feed_post kind without
+        # collapsing across URL shapes pointing at the same post.
+        raw_anchors = [
+            {
+                "href": "https://www.linkedin.com/feed/update/urn:li:activity:111/",
+                "text": "View post",
+            }
+        ]
+        captured = ["https://www.linkedin.com/posts/alice_x-ugcPost-1-xx"]
+        refs = _build_feed_references(raw_anchors, captured)
+        urls = [r["url"] for r in refs]
+        kinds = {r["kind"] for r in refs}
+        assert urls == [
+            "/feed/update/urn:li:activity:111/",
+            "/posts/alice_x-ugcPost-1-xx",
+        ]
+        assert kinds == {"feed_post"}

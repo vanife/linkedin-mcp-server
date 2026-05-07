@@ -347,20 +347,28 @@ def _build_feed_references(
 ) -> list[Reference]:
     """Compose feed references from DOM anchors + SDUI captures.
 
-    DOM anchors give whatever ``classify_link`` recognises (typically
-    ``feed_post`` for ``/feed/update/<urn>/`` shapes). SDUI captures
-    surface every ``/posts/<slug>`` permalink the page emitted, even
-    when no DOM anchor renders for it. We fold both into the same
-    ``feed_post`` kind, deduping on the exact URL string.
+    The feed page renders many anchors that are not post permalinks:
+    sidebar widgets, profile cards, employer logos, etc. Mixing them
+    into ``references["feed"]`` blurs the contract and competes with
+    SDUI permalinks for the per-section cap. We keep only the
+    ``feed_post`` slice from the DOM:
 
-    Note on URL shapes: ``/feed/update/<urn>/`` and ``/posts/<slug>``
-    pointing at the same underlying post will *not* collapse here —
-    ``dedupe_references`` matches exact strings. Both shapes are valid
-    LinkedIn permalinks, so consumers should treat ``feed_post`` as
-    polymorphic on URL form. URN-based equivalence is left to the
-    consumer.
+    - DOM anchors → ``feed_post`` entries with ``/feed/update/<urn>/``
+      URLs (whatever ``classify_link`` recognises).
+    - SDUI captures → ``feed_post`` entries with ``/posts/<slug>`` URLs
+      for permalinks that the DOM does not surface as an anchor.
+
+    Both are deduped on exact URL string. The two shapes pointing at
+    the same underlying post will *not* collapse — ``dedupe_references``
+    matches strings, not URNs. Both are valid LinkedIn permalinks, so
+    consumers should treat ``feed_post`` as polymorphic on URL form;
+    URN-based equivalence is left to the consumer.
     """
-    refs = build_references(raw_references, "feed")
+    refs = [
+        ref
+        for ref in build_references(raw_references, "feed")
+        if ref["kind"] == "feed_post"
+    ]
     existing = {r["url"] for r in refs}
     for sdui_url in captured_urls:
         # AGENTS.md mandates relative paths for LinkedIn references.
@@ -1018,10 +1026,19 @@ class LinkedInExtractor:
                         pending_reads, timeout=_IN_LOOP_DRAIN_TIMEOUT
                     )
                     if done:
-                        # Surface unexpected exceptions; _read() catches
-                        # the expected playwright errors but a parser bug
-                        # should not silently disappear into the loop.
-                        await asyncio.gather(*done, return_exceptions=True)
+                        # Surface unexpected exceptions. _read() catches
+                        # expected playwright errors, but a parser bug
+                        # would otherwise vanish into the loop. Log them
+                        # rather than raising so a single bad response
+                        # doesn't abort the whole scroll session.
+                        for result in await asyncio.gather(
+                            *done, return_exceptions=True
+                        ):
+                            if isinstance(result, BaseException):
+                                logger.warning(
+                                    "Unhandled error in feed _read task: %r",
+                                    result,
+                                )
                     pending_reads[:] = [t for t in pending_reads if not t.done()]
                 new_count = len(captured_urls)
                 if new_count > count:
