@@ -9,6 +9,7 @@ import logging
 from typing import Annotated, Any
 
 from fastmcp import Context, FastMCP
+from fastmcp.exceptions import ToolError
 from pydantic import Field
 
 from linkedin_mcp_server.callbacks import MCPContextProgressCallback
@@ -17,6 +18,7 @@ from linkedin_mcp_server.core.exceptions import AuthenticationError
 from linkedin_mcp_server.dependencies import get_ready_extractor, handle_auth_error
 from linkedin_mcp_server.error_handler import raise_tool_error
 from linkedin_mcp_server.scraping import parse_person_sections
+from linkedin_mcp_server.scraping.extractor import FilterValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -151,17 +153,27 @@ def register_person_tools(
                 progress=0, total=100, message="Starting people search"
             )
 
-            result = await extractor.search_people(
-                keywords,
-                location,
-                network=network,
-                current_company=current_company,
-            )
+            try:
+                result = await extractor.search_people(
+                    keywords,
+                    location,
+                    network=network,
+                    current_company=current_company,
+                )
+            except FilterValidationError as e:
+                # Validation messages carry actionable detail; surface
+                # them as ToolError so mask_error_details doesn't reduce
+                # them to "Error calling tool 'search_people'".
+                raise ToolError(str(e)) from e
 
             await ctx.report_progress(progress=100, total=100, message="Complete")
 
             return result
 
+        except ToolError:
+            # Already a properly formatted client-facing error; do not
+            # log it as "Unexpected error" via raise_tool_error.
+            raise
         except AuthenticationError as e:
             try:
                 await handle_auth_error(e, ctx)

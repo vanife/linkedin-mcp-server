@@ -319,6 +319,16 @@ class ExtractedSection:
     error: dict[str, Any] | None = None
 
 
+class FilterValidationError(ValueError):
+    """Invalid ``search_people`` filter input (network token / URN shape).
+
+    Subclassing ``ValueError`` keeps backward-compatible behaviour for
+    direct extractor callers (``pytest.raises(ValueError)`` matches), while
+    letting the MCP tool wrapper catch this case precisely and surface the
+    actionable message past ``mask_error_details``.
+    """
+
+
 def strip_linkedin_noise(text: str) -> str:
     """Remove LinkedIn page chrome (footer, sidebar recommendations) from innerText.
 
@@ -2387,10 +2397,18 @@ class LinkedInExtractor:
         if network is not None:
             invalid = [t for t in network if t not in _NETWORK_TOKENS]
             if invalid:
-                raise ValueError(
+                raise FilterValidationError(
                     "Invalid network token(s) "
                     f"{invalid!r}; expected any of {list(_NETWORK_TOKENS)!r}"
                 )
+
+        if current_company and not re.fullmatch(r"[0-9]+", current_company):
+            raise FilterValidationError(
+                f"current_company must be a numeric LinkedIn company URN id "
+                f"(e.g. '1115' for SAP); got {current_company!r}. Plain-text "
+                f"company names are silently ignored by LinkedIn. Look up the "
+                f'URN via get_company_profile -> references["about"].'
+            )
 
         params = f"keywords={quote_plus(keywords)}"
         if location:
