@@ -2463,6 +2463,45 @@ class TestActivityFeedExtraction:
         assert kwargs["pause_time"] == 0.5
         assert kwargs["max_scrolls"] == 5
 
+    async def test_company_people_page_waits_for_listing(self, mock_page):
+        """Company /people/ pages call wait_for_function so the employee
+        listing has hydrated before innerText extraction.
+        """
+        mock_page.evaluate = AsyncMock(
+            return_value={
+                "source": "root",
+                "text": "Anthropic\nFollowing\nHome\nAbout\nPeople",
+                "references": [],
+            }
+        )
+        mock_page.wait_for_function = AsyncMock()
+        extractor = LinkedInExtractor(mock_page)
+        with (
+            patch(
+                "linkedin_mcp_server.scraping.extractor.scroll_to_bottom",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "linkedin_mcp_server.scraping.extractor.detect_rate_limit",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "linkedin_mcp_server.scraping.extractor.handle_modal_close",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+        ):
+            await extractor._extract_page_once(
+                "https://www.linkedin.com/company/anthropicresearch/people/",
+                section_name="employees",
+            )
+
+        mock_page.wait_for_function.assert_awaited_once()
+        # The wait predicate should be the people-listing one (looks for /in/ links)
+        wait_arg = mock_page.wait_for_function.call_args[0][0]
+        assert "/in/" in wait_arg
+        assert "querySelectorAll" in wait_arg
+
     async def test_details_page_waits_for_panel_content(self, mock_page):
         """Detail pages (/details/experience/ etc.) call wait_for_function to wait for the panel."""
         mock_page.evaluate = AsyncMock(

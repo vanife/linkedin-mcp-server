@@ -227,8 +227,15 @@ def register_company_tools(
         Useful for finding who works at a company and discovering mutual connections.
         The optional keywords filter narrows results by name, title, or skill.
 
+        company_name must be the exact LinkedIn URL slug (the path segment after
+        /company/), not the display name. LinkedIn assigns unique slugs and the
+        display name often does not match — for example, the AI lab Anthropic
+        lives at /company/anthropicresearch/, not /company/anthropic/. If you
+        are unsure of the slug, call search_companies first and pick the slug
+        from the returned references.
+
         Args:
-            company_name: LinkedIn company name (e.g., "docker", "anthropic", "microsoft")
+            company_name: LinkedIn company URL slug (e.g., "docker", "anthropicresearch", "microsoft")
             ctx: FastMCP context for progress reporting
             keywords: Optional filter by name, job title, or skill (e.g., "engineer", "sales")
 

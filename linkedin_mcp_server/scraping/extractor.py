@@ -1185,6 +1185,24 @@ class LinkedInExtractor:
             except PlaywrightTimeoutError:
                 logger.debug("Search results content did not appear on %s", url)
 
+        # Company people pages (/company/<slug>/people/) initially render only
+        # the company header in <main>; the employee listing hydrates later
+        # via JS. Wait until at least one /in/ profile anchor appears inside
+        # <main> so innerText extraction sees the actual list.
+        is_company_people = "/company/" in url and "/people/" in url
+        if is_company_people:
+            try:
+                await self._page.wait_for_function(
+                    """() => {
+                        const main = document.querySelector('main');
+                        if (!main) return false;
+                        return main.querySelectorAll('a[href*="/in/"]').length > 0;
+                    }""",
+                    timeout=10000,
+                )
+            except PlaywrightTimeoutError:
+                logger.debug("Company people listing did not appear on %s", url)
+
         # Profile detail pages (/details/experience/, /details/education/, etc.)
         # initially render sidebar recommendations into <main> while the section
         # panel loads asynchronously. Wait until the panel replaces the sidebar.
