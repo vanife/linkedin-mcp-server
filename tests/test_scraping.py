@@ -2750,6 +2750,92 @@ class TestActivityFeedExtraction:
         assert result.text == tab_headers
 
 
+class TestCompanyPeopleExtraction:
+    """Tests for /company/<slug>/people/ hydration wait in _extract_page_once."""
+
+    async def test_waits_for_listing_with_5s_timeout(self, mock_page):
+        """Company /people/ pages call wait_for_function so the employee
+        listing has hydrated before scroll/extract. Empty/restricted listings
+        are common, so the timeout is 5s rather than the 10s pattern shared
+        with is_search/is_details."""
+        mock_page.evaluate = AsyncMock(
+            return_value={
+                "source": "root",
+                "text": "Anthropic\nFollowing\nHome\nAbout\nPeople",
+                "references": [],
+            }
+        )
+        mock_page.wait_for_function = AsyncMock()
+        extractor = LinkedInExtractor(mock_page)
+        with (
+            patch(
+                "linkedin_mcp_server.scraping.extractor.scroll_to_bottom",
+                new_callable=AsyncMock,
+            ) as mock_scroll,
+            patch(
+                "linkedin_mcp_server.scraping.extractor.detect_rate_limit",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "linkedin_mcp_server.scraping.extractor.handle_modal_close",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+        ):
+            await extractor._extract_page_once(
+                "https://www.linkedin.com/company/anthropicresearch/people/",
+                section_name="employees",
+            )
+
+        mock_page.wait_for_function.assert_awaited_once()
+        wait_predicate = mock_page.wait_for_function.call_args[0][0]
+        wait_kwargs = mock_page.wait_for_function.call_args.kwargs
+        assert "/in/" in wait_predicate
+        assert "querySelectorAll" in wait_predicate
+        assert wait_kwargs["timeout"] == 5000
+        mock_scroll.assert_awaited_once()
+
+    async def test_continues_extraction_on_wait_timeout(self, mock_page):
+        """When the hydration wait times out (genuinely empty listing), the
+        extractor swallows PlaywrightTimeoutError and still scrolls + extracts
+        rather than propagating the error to the caller."""
+        from patchright.async_api import TimeoutError as PlaywrightTimeoutError
+
+        mock_page.evaluate = AsyncMock(
+            return_value={
+                "source": "root",
+                "text": "Empty company page",
+                "references": [],
+            }
+        )
+        mock_page.wait_for_function = AsyncMock(
+            side_effect=PlaywrightTimeoutError("Timeout")
+        )
+        extractor = LinkedInExtractor(mock_page)
+        with (
+            patch(
+                "linkedin_mcp_server.scraping.extractor.scroll_to_bottom",
+                new_callable=AsyncMock,
+            ) as mock_scroll,
+            patch(
+                "linkedin_mcp_server.scraping.extractor.detect_rate_limit",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "linkedin_mcp_server.scraping.extractor.handle_modal_close",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+        ):
+            result = await extractor._extract_page_once(
+                "https://www.linkedin.com/company/anthropicresearch/people/",
+                section_name="employees",
+            )
+
+        mock_scroll.assert_awaited_once()
+        assert result.text  # non-empty placeholder text from the mock
+
+
 class TestSearchResultsExtraction:
     """Tests for search results page detection and wait behavior in _extract_page_once."""
 
