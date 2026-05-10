@@ -1188,7 +1188,10 @@ class LinkedInExtractor:
         # Company people pages (/company/<slug>/people/) initially render only
         # the company header in <main>; the employee listing hydrates later
         # via JS. Wait until at least one /in/ profile anchor appears inside
-        # <main> so innerText extraction sees the actual list.
+        # <main> so innerText extraction sees the actual list. Use a 5s
+        # timeout instead of the 10s pattern shared with is_search/is_details
+        # — empty/restricted listings are common here (small companies,
+        # privacy settings) and a full 10s wait per call adds up.
         is_company_people = "/company/" in url and "/people/" in url
         if is_company_people:
             try:
@@ -1198,7 +1201,7 @@ class LinkedInExtractor:
                         if (!main) return false;
                         return main.querySelectorAll('a[href*="/in/"]').length > 0;
                     }""",
-                    timeout=10000,
+                    timeout=5000,
                 )
             except PlaywrightTimeoutError:
                 logger.debug("Company people listing did not appear on %s", url)
