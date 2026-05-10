@@ -688,6 +688,7 @@ class LinkedInExtractor:
 
     async def _navigate_to_page(self, url: str) -> None:
         """Navigate to a LinkedIn page and fail fast on auth barriers."""
+        logger.debug("_navigate_to_page: target=%s", url)
         await self._goto_with_auth_checks(url)
 
     # ------------------------------------------------------------------
@@ -1127,6 +1128,21 @@ class LinkedInExtractor:
     ) -> ExtractedSection:
         """Single attempt to navigate, scroll, and extract innerText."""
         await self._navigate_to_page(url)
+        return await self._extract_loaded_section(url, section_name, max_scrolls)
+
+    async def _extract_loaded_section(
+        self,
+        url: str,
+        section_name: str,
+        max_scrolls: int | None = None,
+    ) -> ExtractedSection:
+        """Run the post-navigation extraction pipeline on the current page.
+
+        Assumes ``self._page`` already points at ``url`` (or its post-redirect
+        equivalent). Performs rate-limit detection, modal dismissal, lazy-load
+        scrolling, innerText extraction, noise truncation, and reference
+        building — everything ``_extract_page_once`` does after the goto.
+        """
         await detect_rate_limit(self._page)
 
         # Wait for main content to render
@@ -1327,8 +1343,17 @@ class LinkedInExtractor:
         requested: set[str],
         callbacks: ProgressCallback | None = None,
         max_scrolls: int | None = None,
+        *,
+        main_profile_already_loaded: bool = False,
     ) -> dict[str, Any]:
         """Scrape a person profile with configurable sections.
+
+        When ``main_profile_already_loaded`` is True and ``self._page`` is on
+        the exact profile root for ``username``, the ``main_profile`` section
+        is extracted from the current page without re-navigating. Falls back
+        to ``extract_page`` if the URL drifts or the reuse path returns the
+        soft-rate-limit sentinel (preserving the retry semantics of
+        ``extract_page``).
 
         Returns:
             {url, sections: {name: text}, profile_urn?: str}
@@ -1357,7 +1382,29 @@ class LinkedInExtractor:
 
                 url = base_url + suffix
                 try:
-                    if is_overlay:
+                    can_reuse_main = (
+                        section_name == "main_profile"
+                        and main_profile_already_loaded
+                        and urlparse(self._page.url).path.rstrip("/")
+                        == f"/in/{username}"
+                    )
+                    if can_reuse_main:
+                        extracted = await self._extract_loaded_section(
+                            url,
+                            section_name=section_name,
+                            max_scrolls=max_scrolls,
+                        )
+                        if extracted.text == _RATE_LIMITED_MSG:
+                            logger.info(
+                                "Reuse path soft-rate-limited; falling back "
+                                "to extract_page for retry parity"
+                            )
+                            extracted = await self.extract_page(
+                                url,
+                                section_name=section_name,
+                                max_scrolls=max_scrolls,
+                            )
+                    elif is_overlay:
                         extracted = await self._extract_overlay(
                             url, section_name=section_name
                         )
@@ -1442,6 +1489,7 @@ class LinkedInExtractor:
             sections if sections is not None else {"main_profile"},
             callbacks=callbacks,
             max_scrolls=max_scrolls,
+            main_profile_already_loaded=True,
         )
 
     async def _read_action_signals(self, username: str) -> ActionSignals:

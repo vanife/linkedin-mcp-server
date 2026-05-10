@@ -2954,6 +2954,116 @@ class TestScrapePersonCallbacks:
         cb.on_complete.assert_not_awaited()
 
 
+class TestMainProfileAlreadyLoaded:
+    """Reuse path for scrape_person when get_my_profile already loaded the page."""
+
+    async def test_get_my_profile_passes_already_loaded_flag(self, mock_page):
+        extractor = LinkedInExtractor(mock_page)
+        mock_page.url = "https://www.linkedin.com/in/realuser/"
+        with (
+            patch.object(extractor, "_navigate_to_page", new_callable=AsyncMock) as nav,
+            patch.object(
+                extractor,
+                "scrape_person",
+                new_callable=AsyncMock,
+                return_value={"url": "...", "sections": {}},
+            ) as scrape,
+        ):
+            await extractor.get_my_profile(sections={"main_profile"})
+
+        nav.assert_awaited_once_with("https://www.linkedin.com/in/me/")
+        assert scrape.await_count == 1
+        assert scrape.call_args.kwargs["main_profile_already_loaded"] is True
+
+    async def test_scrape_person_already_loaded_skips_navigation(self, mock_page):
+        extractor = LinkedInExtractor(mock_page)
+        mock_page.url = "https://www.linkedin.com/in/foo/"
+        with (
+            patch.object(
+                extractor,
+                "_extract_loaded_section",
+                new_callable=AsyncMock,
+                return_value=extracted("reused"),
+            ) as loaded,
+            patch.object(
+                extractor, "extract_page", new_callable=AsyncMock
+            ) as extract_page,
+            patch.object(extractor, "_navigate_to_page", new_callable=AsyncMock) as nav,
+            patch(
+                "linkedin_mcp_server.scraping.extractor.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
+        ):
+            await extractor.scrape_person(
+                "foo", {"main_profile"}, main_profile_already_loaded=True
+            )
+
+        loaded.assert_awaited_once()
+        extract_page.assert_not_awaited()
+        nav.assert_not_awaited()
+
+    async def test_scrape_person_already_loaded_url_mismatch_falls_back(
+        self, mock_page
+    ):
+        extractor = LinkedInExtractor(mock_page)
+        mock_page.url = "https://www.linkedin.com/feed/"
+        with (
+            patch.object(
+                extractor,
+                "extract_page",
+                new_callable=AsyncMock,
+                return_value=extracted("fallback"),
+            ) as extract_page,
+            patch.object(
+                extractor,
+                "_extract_loaded_section",
+                new_callable=AsyncMock,
+            ) as loaded,
+            patch(
+                "linkedin_mcp_server.scraping.extractor.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
+        ):
+            await extractor.scrape_person(
+                "foo", {"main_profile"}, main_profile_already_loaded=True
+            )
+
+        extract_page.assert_awaited_once()
+        loaded.assert_not_awaited()
+
+    async def test_scrape_person_already_loaded_rate_limit_falls_back(self, mock_page):
+        extractor = LinkedInExtractor(mock_page)
+        mock_page.url = "https://www.linkedin.com/in/foo/"
+
+        from linkedin_mcp_server.scraping.extractor import _RATE_LIMITED_MSG
+
+        with (
+            patch.object(
+                extractor,
+                "_extract_loaded_section",
+                new_callable=AsyncMock,
+                return_value=extracted(_RATE_LIMITED_MSG),
+            ) as loaded,
+            patch.object(
+                extractor,
+                "extract_page",
+                new_callable=AsyncMock,
+                return_value=extracted("retry succeeded"),
+            ) as extract_page,
+            patch(
+                "linkedin_mcp_server.scraping.extractor.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
+        ):
+            result = await extractor.scrape_person(
+                "foo", {"main_profile"}, main_profile_already_loaded=True
+            )
+
+        loaded.assert_awaited_once()
+        extract_page.assert_awaited_once()
+        assert result["sections"]["main_profile"] == "retry succeeded"
+
+
 class TestScrapeCompanyCallbacks:
     """Test that scrape_company invokes callbacks at each stage."""
 
