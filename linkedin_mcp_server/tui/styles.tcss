@@ -1,0 +1,72 @@
+# LinkedIn MCP TUI styles
+
+Screen {
+    layout: dock;
+}
+
+Header {
+    dock: top;
+    background: $primary;
+    color: $text;
+}
+
+Footer {
+    dock: bottom;
+    background: $primary;
+    color: $text;
+}
+
+/* Login screen */
+#login-container {
+    align: center middle;
+    width: 60%;
+    height: 50%;
+    border: solid $accent;
+    padding: 1 2;
+}
+
+/* Main menu */
+#menu-container {
+    align: center middle;
+    width: 50%;
+    height: 60%;
+    border: solid $primary;
+    padding: 1 2;
+}
+
+#title {
+    text-align: center;
+    width: 1fr;
+    color: $accent;
+    text-style: bold;
+}
+
+#menu-inbox,
+#menu-logout,
+#menu-quit {
+    padding: 0 2;
+}
+
+/* Inbox screen */
+#inbox-list {
+    height: 1fr;
+    overflow-y: auto;
+    padding: 0 1;
+}
+
+.conv-item {
+    height: 1;
+    padding: 0 1;
+}
+
+.conv-item.-selected {
+    background: $boost;
+}
+
+/* Conversation screen */
+#conv-content {
+    height: 1fr;
+    overflow-y: auto;
+    padding: 0 1;
+    white-space: normal;
+}

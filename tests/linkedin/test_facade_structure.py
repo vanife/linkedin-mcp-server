@@ -22,6 +22,13 @@ LINKEDIN = PACKAGE / "linkedin"
 EXTRACTOR = LINKEDIN / "extractor.py"
 FACADE_PACKAGE_IMPORTERS = {
     Path("linkedin_mcp_server/dependencies.py"),
+    # The TUI is a front-end beside the MCP server rather than a tool path: it
+    # owns the browser it opens and has no tool context to be made ready
+    # against, so it builds the facade itself. Every *tool* still reaches one
+    # only through `dependencies.py`, which is what this list exists to keep
+    # true.
+    Path("linkedin_mcp_server/tui/screens/inbox.py"),
+    Path("linkedin_mcp_server/tui/screens/conversation.py"),
     Path("tests/linkedin/policy_scenarios.py"),
     Path("tests/linkedin/test_facade_contracts.py"),
     Path("tests/linkedin/test_facade_results.py"),

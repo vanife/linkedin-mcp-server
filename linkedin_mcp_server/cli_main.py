@@ -21,7 +21,10 @@ from linkedin_mcp_server.exceptions import (
     BrowserDowngradeError,
     ProfileRootRefusedError,
 )
-from linkedin_mcp_server.authentication import clear_auth_state
+from linkedin_mcp_server.authentication import (
+    clear_auth_state,
+    get_authentication_source,
+)
 from linkedin_mcp_server.config import get_config, set_config
 from linkedin_mcp_server.config.loaders import load_config
 from linkedin_mcp_server.config.schema import (
@@ -852,13 +855,16 @@ def main(argv: Sequence[str] | None = None) -> None:
             clear_profile_and_exit()
 
         # Ensure the browser is installed for CLI modes that launch one. Normal
-        # server startup uses async background setup instead. All three modes
+        # server startup uses async background setup instead. These modes all
         # need the same binary: headed and headless are modes of it, not
-        # separate products.
+        # separate products. `--tui` is one of them because its login and inbox
+        # screens drive a browser; left out, it would open a terminal interface
+        # that fails on its first action.
         if (
             config.server.login
             or config.server.status
             or config.server.import_from_browser
+            or config.server.tui
         ):
             ensure_browser_installed()
 
@@ -869,6 +875,25 @@ def main(argv: Sequence[str] | None = None) -> None:
         # Handle --login flag
         if config.server.login:
             get_profile_and_exit()
+
+        # Handle --tui flag
+        if config.server.tui:
+            from linkedin_mcp_server.tui.app import LinkedInTUI
+
+            try:
+                get_authentication_source()
+                has_auth = True
+            except Exception:
+                has_auth = False
+
+            from linkedin_mcp_server.session_state import get_source_profile_dir
+
+            app = LinkedInTUI(
+                has_auth=has_auth,
+                profile_dir=get_source_profile_dir(),
+            )
+            app.run()
+            sys.exit(0)
 
         # Handle --status flag
         if config.server.status:

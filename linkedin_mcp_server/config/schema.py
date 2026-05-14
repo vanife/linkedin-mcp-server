@@ -414,6 +414,7 @@ class ServerConfig:
     claim_profile_root: bool = False
     # Browser key or "auto"; triggers import-from-browser-and-exit.
     import_from_browser: str | None = None
+    tui: bool = False
     # HTTP transport configuration
     host: str = "127.0.0.1"
     port: int = 8000
