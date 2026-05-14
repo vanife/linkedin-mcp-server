@@ -12,7 +12,10 @@ from linkedin_mcp_server.bootstrap import (
     ensure_browser_installed,
 )
 from linkedin_mcp_server.core import AuthenticationError
-from linkedin_mcp_server.authentication import clear_auth_state
+from linkedin_mcp_server.authentication import (
+    clear_auth_state,
+    get_authentication_source,
+)
 from linkedin_mcp_server.config import get_config
 from linkedin_mcp_server.drivers.browser import (
     experimental_persist_derived_runtime,
@@ -295,6 +298,25 @@ def main() -> None:
         # Handle --login flag
         if config.server.login:
             get_profile_and_exit()
+
+        # Handle --tui flag
+        if config.server.tui:
+            from linkedin_mcp_server.tui.app import LinkedInTUI
+
+            try:
+                get_authentication_source()
+                has_auth = True
+            except Exception:
+                has_auth = False
+
+            from linkedin_mcp_server.session_state import get_source_profile_dir
+
+            app = LinkedInTUI(
+                has_auth=has_auth,
+                profile_dir=get_source_profile_dir(),
+            )
+            app.run()
+            sys.exit(0)
 
         # Handle --status flag
         if config.server.status:

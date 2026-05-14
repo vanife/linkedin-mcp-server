@@ -1,0 +1,10 @@
+[tools]
+python = "3.12"
+
+[env]
+_.file = ".env"
+
+[tasks."linkedin:serve"]
+description = "Start LinkedIn MCP server in HTTP mode"
+run = "uv run linkedin-scraper-mcp --transport streamable-http --host ${MCP_HOST} --port ${MCP_PORT:-8001}"
+

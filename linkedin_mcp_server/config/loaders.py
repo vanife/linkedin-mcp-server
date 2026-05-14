@@ -298,6 +298,12 @@ def load_from_args(config: AppConfig) -> AppConfig:
     )
 
     parser.add_argument(
+        "--tui",
+        action="store_true",
+        help="Launch the interactive TUI (terminal user interface)",
+    )
+
+    parser.add_argument(
         "--user-data-dir",
         type=str,
         default=None,
@@ -363,6 +369,9 @@ def load_from_args(config: AppConfig) -> AppConfig:
 
     if args.logout:
         config.server.logout = True
+
+    if args.tui:
+        config.server.tui = True
 
     if args.user_data_dir:
         config.browser.user_data_dir = args.user_data_dir

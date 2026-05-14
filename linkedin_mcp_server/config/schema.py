@@ -69,6 +69,7 @@ class ServerConfig:
     login: bool = False
     status: bool = False  # Check session validity and exit
     logout: bool = False
+    tui: bool = False
     # HTTP transport configuration
     host: str = "127.0.0.1"
     port: int = 8000

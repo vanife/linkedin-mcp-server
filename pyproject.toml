@@ -37,6 +37,7 @@ dependencies = [
     "inquirer>=3.4.0",
     "patchright>=1.40.0",
     "python-dotenv>=1.1.1",
+    "textual>=0.60.0",
 ]
 
 [project.urls]
@@ -49,6 +50,7 @@ Changelog = "https://github.com/stickerdaniel/linkedin-mcp-server/releases"
 [project.scripts]
 linkedin-mcp-server = "linkedin_mcp_server.cli_main:main"
 linkedin-scraper-mcp = "linkedin_mcp_server.cli_main:main"
+linkedin-mcp-tui = "linkedin_mcp_server.tui.cli:main"
 
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
